@@ -1,0 +1,26 @@
+// Prisma Schema - E-Commerce MVP
+// Architecture simplifiée - Wardley Map
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// MODELS - À implémenter feature par feature
+// ============================================
+
+// Les models seront ajoutés progressivement :
+// - User (base)
+// - Order (F1)
+// - Product (F1, F3)
+// - StockReservation (F3)
+// - Promotion (F2)
+// - PromotionUsage (F2)
+// - PaymentAttempt (F5)
+// - OrderStateAudit (F4)
+// - CartRecoveryLog (F6)
