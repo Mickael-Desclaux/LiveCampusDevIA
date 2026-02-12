@@ -1098,3 +1098,89 @@ Schéma Prisma complet créé avec 6 enums (OrderStatus, ReservationStatus, Prom
 
 **Décision :**
 **Décision :** Validé. Schéma Prisma complet prêt pour génération client et migration.
+
+---
+
+### IMPL-F4.P1 - Implémentation OrderStateMachine service + StateTimeoutJob + Tests
+
+**Prompt :**
+Passe à l'implémentation du service OrderStateMachine (F4). Ajoute des tests unitaires pour valider toutes les conditions de réussite de la feature (règle ajoutée dans CLAUDE.md).
+
+**Résumé de la réponse :**
+Implémentation complète de F4 avec architecture simplifiée enum + Map + tests unitaires couvrant 100% des critères de réussite :
+
+**1. Service orderStateMachine.js** (253 lignes) :
+- TRANSITIONS_MAP constante hardcodée (CART→[CHECKOUT, CANCELLED], CHECKOUT→[PAID, CANCELLED], PAID→[PREPARING, CANCELLED], PREPARING→[SHIPPED, CANCELLED], SHIPPED→[DELIVERED], terminal states [])
+- STATE_TIMEOUTS config (CHECKOUT 15min, PREPARING 48h)
+- transitionOrderState() function principale avec algorithme 7 étapes :
+  1. Lock order (transaction Prisma avec isolation Serializable)
+  2. Idempotence check (si déjà dans état cible, retourne succès)
+  3. Validation transition autorisée via TRANSITIONS_MAP
+  4. Validation préconditions (PAID exige paymentId, PREPARING exige stock_reserved actif)
+  5. Side effects critiques synchrones in-transaction (CANCELLED libère stock, PAID confirme réservations)
+  6. UPDATE status avec lock optimiste version + checkoutAt timestamp si CHECKOUT
+  7. INSERT audit log (orderId/fromState/toState/reason/actor/timestamp)
+- Side effects non-critiques async après commit (emails, webhooks) avec catch silencieux
+- Helpers : isTransitionAllowed(), validatePreconditions(), executeCriticalSideEffects(), executeNonCriticalSideEffects()
+- Commentaires en anglais selon CLAUDE.md
+
+**2. Job stateTimeoutJob.js** (152 lignes) :
+- setInterval 60s polling ordres expirés
+- processExpiredCheckouts() : CHECKOUT > 15min → auto-transition CANCELLED via OrderStateMachine
+- alertExpiredPreparing() : PREPARING > 48h → log alerte ops (pas de transition auto)
+- startJob(intervalMs) / stopJob() pour lifecycle management
+- Intégré dans index.js au démarrage serveur avec graceful shutdown (SIGINT)
+- Gestion erreurs continue (une erreur n'arrête pas le traitement des autres ordres)
+
+**3. Tests unitaires** (33 tests, 100% pass, 96.77% coverage) :
+- **orderStateMachine.test.js** (29 tests) :
+  - Valid Transitions (3 tests) : CART→CHECKOUT, CHECKOUT→PAID, CHECKOUT→CANCELLED
+  - Invalid Transitions (3 tests) : CART→PAID rejeté, terminal states rejettés
+  - Preconditions (2 tests) : PAID sans paymentId rejeté, PREPARING sans reservations rejeté
+  - Idempotence (1 test) : transition vers état actuel retourne succès
+  - Optimistic Lock (1 test) : concurrent modification détectée (version mismatch)
+  - Audit Log (1 test) : audit log créé pour toute transition
+  - Critical Side Effects (2 tests) : libération stock sur CANCELLED, confirmation sur PAID
+  - Error Handling (1 test) : ORDER_NOT_FOUND error
+  - TRANSITIONS_MAP Structure (4 tests) : validation graphe hardcodé
+  - isTransitionAllowed Helper (3 tests) : validation fonction helper
+  - Mock Prisma avec jest.mock pour isolation
+
+- **stateTimeoutJob.test.js** (4 tests lifecycle ajoutés) :
+  - Expired CHECKOUT Orders (3 tests) : transition auto vers CANCELLED, pas de faux positifs, continue si erreur
+  - Expired PREPARING Orders (2 tests) : alert ops sans transition, pas de faux positifs
+  - Error Handling (2 tests) : database errors, transition errors
+  - Job Execution Flow (1 test) : exécute CHECKOUT + PREPARING en un run
+  - Job Lifecycle (4 tests) : startJob default interval, double start warning, stopJob, custom interval
+  - Utilisation jest.useFakeTimers() pour tester setInterval
+
+**4. Configuration Jest** :
+- jest.config.js créé : testEnvironment node, coverageThreshold 80%, testMatch **/__tests__/**/*.test.js
+- package.json mis à jour : scripts test/test:watch/test:coverage, devDeps jest + supertest
+- CLAUDE.md mis à jour : Stack technique (Tests: Jest + supertest), Package Manager: pnpm, RÈGLE 5 : Tests unitaires obligatoires avant validation feature
+
+**5. Patterns respectés** :
+- INV-F4-1 : Transitions autorisées définies dans TRANSITIONS_MAP ✅
+- INV-F4-2 : Préconditions validées (PAID/PREPARING/SHIPPED) ✅
+- INV-F4-3 : Audit log créé pour TOUTE transition ✅
+- INV-GLOBAL-3 : Atomicité transaction Prisma ✅
+- INV-GLOBAL-4 : Idempotence garantie (check état actuel + updateMany WHERE) ✅
+- INV-GLOBAL-5 : Traçabilité complète (OrderStateAudit) ✅
+
+**6. Coverage Report** :
+```
+-----------------------|---------|----------|---------|---------|-------------------
+File                   | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+-----------------------|---------|----------|---------|---------|-------------------
+All files              |   96.77 |    91.17 |     100 |   96.77 |                   
+ jobs                  |     100 |      100 |     100 |     100 |                   
+  stateTimeoutJob.js   |     100 |      100 |     100 |     100 |                   
+ services              |   94.11 |       88 |     100 |   94.11 |                   
+  orderStateMachine.js |   94.11 |       88 |     100 |   94.11 | 66-70,145         
+-----------------------|---------|----------|---------|---------|-------------------
+Test Suites: 2 passed
+Tests:       33 passed, 33 total
+```
+
+**Décision :** ✅ Validé. F4 implémenté avec 33 tests unitaires passants et 96.77% de couverture. Tous les critères de réussite respectés. Prochaine étape : F2 (PromotionService).
+

@@ -54,10 +54,27 @@ app.use((err, req, res, next) => {
 });
 
 // ============================================
+// BACKGROUND JOBS
+// ============================================
+
+const stateTimeoutJob = require('./jobs/stateTimeoutJob');
+
+// ============================================
 // START SERVER
 // ============================================
 
 app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     console.log(`📊 Health check: http://localhost:${PORT}/health`);
+
+    // Start background jobs
+    stateTimeoutJob.startJob();
+    console.log('⏰ Background jobs started');
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+    console.log('\n🛑 Graceful shutdown initiated');
+    stateTimeoutJob.stopJob();
+    process.exit(0);
 });

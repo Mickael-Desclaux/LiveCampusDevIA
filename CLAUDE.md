@@ -1,6 +1,6 @@
 # Guide de Développement - Application E-Commerce
 
-> **Contexte :** Architecture simplifiée issue de la méthodologie Wardley Map pour un MVP 1.5 jour (12h). Ce fichier définit les règles de développement, l'architecture, et les invariants critiques à respecter.
+> **Contexte :** Architecture simplifiée issue de la méthodologie Wardley Map. Ce fichier définit les règles de développement, l'architecture, et les invariants critiques à respecter.
 
 ---
 
@@ -19,6 +19,8 @@ Backend: Node.js + Express
 ORM: Prisma
 Base de données: PostgreSQL
 Frontend: React
+Tests: Jest + supertest
+Package Manager: pnpm (OBLIGATOIRE - jamais npm ou yarn)
 Jobs: setInterval en mémoire (pas de cron externe)
 Cache: Map en mémoire (pas de Redis)
 Patterns: Transaction Prisma, Lock optimiste/pessimiste, Enum + Map
@@ -26,6 +28,7 @@ Architecture: Service Layer simple (pas de Domain-Driven Design complet)
 ```
 
 **Dépendances Node.js principales :**
+
 ```json
 {
   "dependencies": {
@@ -36,12 +39,15 @@ Architecture: Service Layer simple (pas de Domain-Driven Design complet)
   },
   "devDependencies": {
     "prisma": "^5.0.0",
-    "nodemon": "^3.0.0"
+    "nodemon": "^3.0.0",
+    "jest": "^29.0.0",
+    "supertest": "^6.3.0"
   }
 }
 ```
 
 **Commandes Prisma essentielles :**
+
 ```bash
 npx prisma init                    # Initialiser Prisma
 npx prisma migrate dev --name init # Créer migration
@@ -56,11 +62,13 @@ npx prisma studio                  # Interface admin DB
 ### Composants et Responsabilités
 
 **RÈGLE 1 : Séparation stricte des responsabilités**
+
 - Chaque service a une responsabilité unique
 - Pas de logique métier dans les controllers/routes
 - Pas d'appels Prisma directs hors des services
 
 **RÈGLE 2 : Ordre de dépendance respecté**
+
 ```
 OrderStateMachine (F4) ← Base pour tous
     ↓
@@ -74,14 +82,28 @@ CartRecoveryService (F6) ← Indépendant
 ```
 
 **RÈGLE 3 : Pas de dépendances circulaires**
+
 - ❌ INTERDIT : Service A appelle Service B qui appelle Service A
 - ✅ AUTORISÉ : Service A appelle Service B qui est autonome
 
 **RÈGLE 4 : Services appelables**
+
 - `OrderStateMachine` : Appelé par OrderService, PaymentService, StateTimeoutJob
 - `StockReservationService` : Appelé par OrderService, PaymentService, ReservationExpirationJob
 - `PromotionService` : Appelé uniquement par OrderService
 - `CartRecoveryService` : Appelé uniquement par CartReminderJob
+
+**RÈGLE 5 : Tests unitaires obligatoires avant validation feature**
+
+- Toute feature DOIT avoir des tests unitaires couvrant TOUS les critères de réussite définis
+- Tests obligatoires :
+  - ✅ Cas nominaux (happy path)
+  - ✅ Cas d'erreur (validations, préconditions)
+  - ✅ Cas limites (edge cases)
+  - ✅ Invariants critiques (atomicité, idempotence, cohérence)
+- Framework : Jest + supertest (pour routes API)
+- Couverture minimale : 80% des lignes de code du service
+- Une feature n'est considérée comme VALIDÉE que si tous les tests passent
 
 ---
 
@@ -90,30 +112,35 @@ CartRecoveryService (F6) ← Indépendant
 ### Invariants Globaux (Niveau Application)
 
 **INV-GLOBAL-1 : Cohérence du stock**
+
 ```prisma
 À TOUT INSTANT : stock_available + stock_reserved = stock_total
 Implémentation : Validation dans StockReservationService + @@ custom SQL constraint
 ```
 
 **INV-GLOBAL-2 : Stock jamais négatif**
+
 ```prisma
 À TOUT INSTANT : stock_available >= 0
 Implémentation : Validation JS avant update + @@ custom SQL constraint
 ```
 
 **INV-GLOBAL-3 : Atomicité des transactions**
+
 ```javascript
 TOUTE opération multi-étapes DOIT être dans prisma.$transaction([...])
 Exemple : Réservation stock + Transition état = 1 transaction
 ```
 
 **INV-GLOBAL-4 : Idempotence garantie**
+
 ```prisma
 TOUTE opération peut être retryée sans effet de bord
 Implémentation : @@unique constraints, WHERE conditions dans updates
 ```
 
 **INV-GLOBAL-5 : Traçabilité complète**
+
 ```prisma
 TOUTE mutation DOIT être loggée avec timestamp + actor + reason
 Implémentation : Models *AuditLog, champs DateTime @default(now())
@@ -122,31 +149,37 @@ Implémentation : Models *AuditLog, champs DateTime @default(now())
 ### Invariants par Feature
 
 **Feature 1 (OrderService) :**
+
 - `INV-F1-1` : Snapshot prix immutable (itemsSnapshot Json figé au checkout)
 - `INV-F1-2` : 1 seul panier CART actif par user (@@unique([userId, status]) where status = CART)
 - `INV-F1-3` : Lock optimiste via `version` pour transition CART → CHECKOUT
 
 **Feature 2 (PromotionService) :**
+
 - `INV-F2-1` : Max 1 promo EXCLUSIVE, incompatible avec autres tags
 - `INV-F2-2` : Ordre déterministe : AUTO → STACKABLE → EXCLUSIVE
 - `INV-F2-3` : Montant final >= 0 (protection total négatif)
 
 **Feature 3 (StockReservationService) :**
+
 - `INV-F3-1` : 1 order_id = max 1 réservation active (@@unique([orderId]))
 - `INV-F3-2` : Libération idempotente (WHERE status = ACTIVE)
 - `INV-F3-3` : Atomicité réservation : décrément + increment + create en 1 transaction
 
 **Feature 4 (OrderStateMachine) :**
+
 - `INV-F4-1` : Transitions autorisées définies dans TRANSITIONS_MAP hardcodée
 - `INV-F4-2` : Préconditions validées (PAID exige paymentId != null)
 - `INV-F4-3` : Audit log créé pour TOUTE transition
 
 **Feature 5 (PaymentService) :**
+
 - `INV-F5-1` : Classification erreur déterministe (ERROR_CLASSIFICATION map)
 - `INV-F5-2` : Libération stock si échec DEFINITIVE uniquement
 - `INV-F5-3` : 1 order_id = max 1 payment_attempt actif (@@unique([orderId]))
 
 **Feature 6 (CartRecoveryService) :**
+
 - `INV-F6-1` : 1 panier = max 1 relance (flag recoveryEmailSent)
 - `INV-F6-2` : Opt-out RGPD respecté (WHERE marketingConsent = true)
 - `INV-F6-3` : Token expiration validée (recoveryTokenExpiresAt > now())
@@ -222,33 +255,33 @@ async function reserveStockBAD(items, orderId) {
 ```javascript
 // ✅ BON - Idempotent via WHERE
 async function markRecoverySent(cartId, token) {
-    const result = await prisma.order.updateMany({
-        where: {
-            id: cartId,
-            recoveryEmailSent: false  // Idempotence : update seulement si false
-        },
-        data: {
-            recoveryEmailSent: true,
-            recoveryToken: token,
-            recoveryTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-        }
-    });
+  const result = await prisma.order.updateMany({
+    where: {
+      id: cartId,
+      recoveryEmailSent: false, // Idempotence : update seulement si false
+    },
+    data: {
+      recoveryEmailSent: true,
+      recoveryToken: token,
+      recoveryTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    },
+  });
 
-    if (result.count === 0) {
-        // Déjà traité, skip silencieusement
-        return { success: true, idempotent: true };
-    }
+  if (result.count === 0) {
+    // Déjà traité, skip silencieusement
+    return { success: true, idempotent: true };
+  }
 
-    return { success: true, idempotent: false };
+  return { success: true, idempotent: false };
 }
 
 // ❌ MAUVAIS - Pas idempotent
 async function markRecoverySentBAD(cartId, token) {
-    await prisma.order.update({
-        where: { id: cartId },
-        data: { recoveryEmailSent: true }
-    });
-    // Si appelé 2x, pas de détection que c'était déjà fait
+  await prisma.order.update({
+    where: { id: cartId },
+    data: { recoveryEmailSent: true },
+  });
+  // Si appelé 2x, pas de détection que c'était déjà fait
 }
 ```
 
@@ -259,57 +292,57 @@ async function markRecoverySentBAD(cartId, token) {
 ```javascript
 // ✅ BON - Lock optimiste avec Prisma
 async function transitionState(orderId, toState, reason) {
-    return await prisma.$transaction(async (tx) => {
-        // 1. Récupérer état actuel
-        const order = await tx.order.findUnique({
-            where: { id: orderId }
-        });
-
-        if (!order) {
-            throw new Error('ORDER_NOT_FOUND');
-        }
-
-        const currentState = order.status;
-        const currentVersion = order.version;
-
-        // 2. Update avec lock optimiste
-        const result = await tx.order.updateMany({
-            where: {
-                id: orderId,
-                status: currentState,
-                version: currentVersion  // Lock optimiste
-            },
-            data: {
-                status: toState,
-                version: { increment: 1 }
-            }
-        });
-
-        if (result.count === 0) {
-            throw new Error('CONCURRENT_MODIFICATION'); // Détecté !
-        }
-
-        // 3. Audit log
-        await tx.orderStateAudit.create({
-            data: {
-                orderId,
-                fromState: currentState,
-                toState,
-                reason
-            }
-        });
-
-        return { success: true };
+  return await prisma.$transaction(async (tx) => {
+    // 1. Récupérer état actuel
+    const order = await tx.order.findUnique({
+      where: { id: orderId },
     });
+
+    if (!order) {
+      throw new Error("ORDER_NOT_FOUND");
+    }
+
+    const currentState = order.status;
+    const currentVersion = order.version;
+
+    // 2. Update avec lock optimiste
+    const result = await tx.order.updateMany({
+      where: {
+        id: orderId,
+        status: currentState,
+        version: currentVersion, // Lock optimiste
+      },
+      data: {
+        status: toState,
+        version: { increment: 1 },
+      },
+    });
+
+    if (result.count === 0) {
+      throw new Error("CONCURRENT_MODIFICATION"); // Détecté !
+    }
+
+    // 3. Audit log
+    await tx.orderStateAudit.create({
+      data: {
+        orderId,
+        fromState: currentState,
+        toState,
+        reason,
+      },
+    });
+
+    return { success: true };
+  });
 }
 
 // ❌ MAUVAIS - Pas de lock optimiste
 async function transitionStateBAD(orderId, toState) {
-    await prisma.order.update({
-        where: { id: orderId },
-        data: { status: toState }
-    });
-    // Si 2 requêtes simultanées, pas de détection de conflit
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { status: toState },
+  });
+  // Si 2 requêtes simultanées, pas de détection de conflit
 }
 ```
 
@@ -320,40 +353,40 @@ async function transitionStateBAD(orderId, toState) {
 ```javascript
 // ✅ BON - Validation complète avant mutation
 async function processPayment(orderId, paymentDetails) {
-    // 1. VALIDATION (lecture seule)
-    const order = await prisma.order.findFirst({
-        where: {
-            id: orderId,
-            status: 'CHECKOUT'
-        }
-    });
+  // 1. VALIDATION (lecture seule)
+  const order = await prisma.order.findFirst({
+    where: {
+      id: orderId,
+      status: "CHECKOUT",
+    },
+  });
 
-    if (!order) {
-        throw new Error('INVALID_ORDER_STATE');
-    }
+  if (!order) {
+    throw new Error("INVALID_ORDER_STATE");
+  }
 
-    const checkoutTime = new Date(order.checkoutAt);
-    const now = Date.now();
+  const checkoutTime = new Date(order.checkoutAt);
+  const now = Date.now();
 
-    if (now - checkoutTime.getTime() > 10 * 60 * 1000) {
-        throw new Error('RESERVATION_EXPIRED');
-    }
+  if (now - checkoutTime.getTime() > 10 * 60 * 1000) {
+    throw new Error("RESERVATION_EXPIRED");
+  }
 
-    // 2. MUTATION (après validation)
-    return await prisma.$transaction(async (tx) => {
-        // ... mutations
-    });
+  // 2. MUTATION (après validation)
+  return await prisma.$transaction(async (tx) => {
+    // ... mutations
+  });
 }
 
 // ❌ MAUVAIS - Mutation avant validation complète
 async function processPaymentBAD(orderId) {
-    await prisma.order.update({
-        where: { id: orderId },
-        data: { paymentAttempt: { increment: 1 } }
-    });
-    // Si ensuite on découvre que order.status != 'CHECKOUT', trop tard
-    const order = await prisma.order.findUnique({ where: { id: orderId } });
-    if (order.status !== 'CHECKOUT') throw new Error('INVALID_STATE');
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { paymentAttempt: { increment: 1 } },
+  });
+  // Si ensuite on découvre que order.status != 'CHECKOUT', trop tard
+  const order = await prisma.order.findUnique({ where: { id: orderId } });
+  if (order.status !== "CHECKOUT") throw new Error("INVALID_STATE");
 }
 ```
 
@@ -364,45 +397,48 @@ async function processPaymentBAD(orderId) {
 ```javascript
 // ✅ BON - Séparation claire
 async function transitionToPaid(orderId) {
-    // Side effects CRITIQUES : dans transaction
-    await prisma.$transaction(async (tx) => {
-        await tx.order.update({
-            where: { id: orderId },
-            data: { status: 'PAID' }
-        });
-
-        await tx.stockReservation.updateMany({
-            where: { orderId },
-            data: { status: 'CONFIRMED' }
-        });
-
-        await tx.orderStateAudit.create({
-            data: {
-                orderId,
-                fromState: 'CHECKOUT',
-                toState: 'PAID'
-            }
-        });
+  // Side effects CRITIQUES : dans transaction
+  await prisma.$transaction(async (tx) => {
+    await tx.order.update({
+      where: { id: orderId },
+      data: { status: "PAID" },
     });
 
-    // Side effects NON-CRITIQUES : après commit (échec non bloquant)
-    try {
-        await sendEmail(orderId, 'payment_confirmation');
-    } catch (err) {
-        console.error('Email failed but order is PAID', { orderId, error: err.message });
-        // État déjà committé, on ne rollback pas pour un email
-    }
+    await tx.stockReservation.updateMany({
+      where: { orderId },
+      data: { status: "CONFIRMED" },
+    });
+
+    await tx.orderStateAudit.create({
+      data: {
+        orderId,
+        fromState: "CHECKOUT",
+        toState: "PAID",
+      },
+    });
+  });
+
+  // Side effects NON-CRITIQUES : après commit (échec non bloquant)
+  try {
+    await sendEmail(orderId, "payment_confirmation");
+  } catch (err) {
+    console.error("Email failed but order is PAID", {
+      orderId,
+      error: err.message,
+    });
+    // État déjà committé, on ne rollback pas pour un email
+  }
 }
 
 // ❌ MAUVAIS - Email dans transaction (bloquant)
 async function transitionToPaidBAD(orderId) {
-    await prisma.$transaction(async (tx) => {
-        await tx.order.update({
-            where: { id: orderId },
-            data: { status: 'PAID' }
-        });
-        await sendEmail(orderId, 'payment_confirmation'); // Si timeout → rollback commande !
+  await prisma.$transaction(async (tx) => {
+    await tx.order.update({
+      where: { id: orderId },
+      data: { status: "PAID" },
     });
+    await sendEmail(orderId, "payment_confirmation"); // Si timeout → rollback commande !
+  });
 }
 ```
 
@@ -415,20 +451,20 @@ async function transitionToPaidBAD(orderId) {
 ```javascript
 // ❌ INTERDIT
 async function checkout(userId) {
-    const cart = await getCart(userId);
-    await applyPromotions(cart); // Modifie cart
-    await reserveStock(cart); // Si erreur ici, promotions déjà appliquées
-    await updateCartStatus(cart.id, 'CHECKOUT'); // Incohérence
+  const cart = await getCart(userId);
+  await applyPromotions(cart); // Modifie cart
+  await reserveStock(cart); // Si erreur ici, promotions déjà appliquées
+  await updateCartStatus(cart.id, "CHECKOUT"); // Incohérence
 }
 
 // ✅ CORRECT
 async function checkout(userId) {
-    return await prisma.$transaction(async (tx) => {
-        const cart = await getCart(userId, tx);
-        const promos = await applyPromotions(cart, tx);
-        await reserveStock(cart, tx);
-        await updateCartStatus(cart.id, 'CHECKOUT', tx);
-    });
+  return await prisma.$transaction(async (tx) => {
+    const cart = await getCart(userId, tx);
+    const promos = await applyPromotions(cart, tx);
+    await reserveStock(cart, tx);
+    await updateCartStatus(cart.id, "CHECKOUT", tx);
+  });
 }
 ```
 
@@ -436,26 +472,26 @@ async function checkout(userId) {
 
 ```javascript
 // ❌ INTERDIT
-app.post('/cart/checkout', async (req, res) => {
-    const cart = await prisma.order.findFirst({ where: { userId: req.user.id } });
-    const promos = await prisma.promotion.findMany({ where: { tag: 'AUTO' } });
-    let total = 0;
-    for (const item of cart.itemsSnapshot) {
-        total += item.price * item.quantity;
-    }
-    // ... 50 lignes de logique métier
+app.post("/cart/checkout", async (req, res) => {
+  const cart = await prisma.order.findFirst({ where: { userId: req.user.id } });
+  const promos = await prisma.promotion.findMany({ where: { tag: "AUTO" } });
+  let total = 0;
+  for (const item of cart.itemsSnapshot) {
+    total += item.price * item.quantity;
+  }
+  // ... 50 lignes de logique métier
 });
 
 // ✅ CORRECT
-const orderService = require('./services/orderService');
+const orderService = require("./services/orderService");
 
-app.post('/cart/checkout', async (req, res) => {
-    try {
-        const result = await orderService.createOrderFromCart(req.user.id);
-        res.json(result);
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
+app.post("/cart/checkout", async (req, res) => {
+  try {
+    const result = await orderService.createOrderFromCart(req.user.id);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 ```
 
@@ -464,11 +500,11 @@ app.post('/cart/checkout', async (req, res) => {
 ```javascript
 // ❌ INTERDIT - Viole INV-F1-1
 async function updateOrderPrice(orderId, newPrice) {
-    await prisma.order.update({
-        where: { id: orderId },
-        data: { totalSnapshot: newPrice }
-    });
-    // Les snapshots sont IMMUTABLES après checkout
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { totalSnapshot: newPrice },
+  });
+  // Les snapshots sont IMMUTABLES après checkout
 }
 
 // ✅ CORRECT - Pas de modification snapshot
@@ -480,31 +516,31 @@ async function updateOrderPrice(orderId, newPrice) {
 ```javascript
 // ❌ INTERDIT
 async function getOrdersWithProducts(userIds) {
-    const orders = await prisma.order.findMany({
-        where: { userId: { in: userIds } }
-    });
+  const orders = await prisma.order.findMany({
+    where: { userId: { in: userIds } },
+  });
 
-    for (const order of orders) {
-        order.products = await prisma.product.findMany({
-            where: { id: { in: order.productIds } }
-        });
-        // N+1 queries
-    }
+  for (const order of orders) {
+    order.products = await prisma.product.findMany({
+      where: { id: { in: order.productIds } },
+    });
+    // N+1 queries
+  }
 }
 
 // ✅ CORRECT - Use Prisma include
 async function getOrdersWithProducts(userIds) {
-    const orders = await prisma.order.findMany({
-        where: { userId: { in: userIds } },
+  const orders = await prisma.order.findMany({
+    where: { userId: { in: userIds } },
+    include: {
+      items: {
         include: {
-            items: {
-                include: {
-                    product: true
-                }
-            }
-        }
-    });
-    // 1 query avec join
+          product: true,
+        },
+      },
+    },
+  });
+  // 1 query avec join
 }
 ```
 
@@ -513,21 +549,21 @@ async function getOrdersWithProducts(userIds) {
 ```javascript
 // ❌ INTERDIT
 try {
-    await processPayment(orderId);
+  await processPayment(orderId);
 } catch (err) {
-    // Erreur silencieuse, impossible à débugger
+  // Erreur silencieuse, impossible à débugger
 }
 
 // ✅ CORRECT
 try {
-    await processPayment(orderId);
+  await processPayment(orderId);
 } catch (err) {
-    console.error('Payment processing failed', {
-        orderId,
-        error: err.message,
-        stack: err.stack
-    });
-    throw err; // Re-throw si critique
+  console.error("Payment processing failed", {
+    orderId,
+    error: err.message,
+    stack: err.stack,
+  });
+  throw err; // Re-throw si critique
 }
 ```
 
@@ -577,7 +613,7 @@ const product = await prisma.product.findUnique({ where: { id: productId } });
 
 // Check if user has exceeded promotion usage limit
 if (usage.count >= promotion.usageLimitPerUser) {
-    throw new Error('PROMO_LIMIT_EXCEEDED');
+  throw new Error("PROMO_LIMIT_EXCEEDED");
 }
 
 // ❌ MAUVAIS - Commentaires en français
@@ -586,6 +622,7 @@ const product = await prisma.product.findUnique({ where: { id: productId } });
 ```
 
 **Application :**
+
 - Code JavaScript/TypeScript : Commentaires en anglais
 - Prisma schema : Commentaires en anglais
 - README.md : Français (documentation utilisateur)
@@ -646,10 +683,10 @@ VibeCoding/
 
 ```javascript
 // server/src/prisma.js
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient({
-    log: ['query', 'info', 'warn', 'error'], // Logging SQL queries
+  log: ["query", "info", "warn", "error"], // Logging SQL queries
 });
 
 module.exports = prisma;
@@ -666,36 +703,36 @@ PORT=3000
 ```javascript
 // ✅ Erreurs métier typées
 class InsufficientStockError extends Error {
-    constructor(productId, requested, available) {
-        super(`Insufficient stock for product ${productId}`);
-        this.name = 'InsufficientStockError';
-        this.productId = productId;
-        this.requested = requested;
-        this.available = available;
-    }
+  constructor(productId, requested, available) {
+    super(`Insufficient stock for product ${productId}`);
+    this.name = "InsufficientStockError";
+    this.productId = productId;
+    this.requested = requested;
+    this.available = available;
+  }
 }
 
 // ✅ Middleware error handler Express
 app.use((err, req, res, next) => {
-    console.error(err.stack);
+  console.error(err.stack);
 
-    if (err instanceof InsufficientStockError) {
-        return res.status(400).json({
-            error: 'INSUFFICIENT_STOCK',
-            details: {
-                productId: err.productId,
-                requested: err.requested,
-                available: err.available
-            }
-        });
-    }
+  if (err instanceof InsufficientStockError) {
+    return res.status(400).json({
+      error: "INSUFFICIENT_STOCK",
+      details: {
+        productId: err.productId,
+        requested: err.requested,
+        available: err.available,
+      },
+    });
+  }
 
-    // Prisma errors
-    if (err.code === 'P2002') {
-        return res.status(400).json({ error: 'UNIQUE_CONSTRAINT_VIOLATION' });
-    }
+  // Prisma errors
+  if (err.code === "P2002") {
+    return res.status(400).json({ error: "UNIQUE_CONSTRAINT_VIOLATION" });
+  }
 
-    res.status(500).json({ error: 'INTERNAL_SERVER_ERROR' });
+  res.status(500).json({ error: "INTERNAL_SERVER_ERROR" });
 });
 ```
 
@@ -755,4 +792,4 @@ app.use((err, req, res, next) => {
 
 ---
 
-*Ce guide est la référence absolue pour le développement de ce projet. Tout code qui viole ces règles DOIT être refactoré.*
+_Ce guide est la référence absolue pour le développement de ce projet. Tout code qui viole ces règles DOIT être refactoré._
