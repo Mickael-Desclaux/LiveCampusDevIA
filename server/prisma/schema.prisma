@@ -1,5 +1,6 @@
 // Prisma Schema - E-Commerce MVP
-// Architecture simplifiée - Wardley Map
+// Simplified architecture - Wardley Map methodology
+// See CLAUDE.md for rules and invariants
 
 generator client {
   provider = "prisma-client-js"
@@ -11,16 +12,269 @@ datasource db {
 }
 
 // ============================================
-// MODELS - À implémenter feature par feature
+// ENUMS
 // ============================================
 
-// Les models seront ajoutés progressivement :
-// - User (base)
-// - Order (F1)
-// - Product (F1, F3)
-// - StockReservation (F3)
-// - Promotion (F2)
-// - PromotionUsage (F2)
-// - PaymentAttempt (F5)
-// - OrderStateAudit (F4)
-// - CartRecoveryLog (F6)
+enum OrderStatus {
+  CART
+  CHECKOUT
+  PAID
+  PREPARING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  RELEASED
+  EXPIRED
+  CONFIRMED
+}
+
+enum PromotionType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_SHIPPING
+}
+
+enum PromotionTag {
+  EXCLUSIVE
+  STACKABLE
+  AUTO
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
+}
+
+enum PaymentErrorType {
+  INSUFFICIENT_FUNDS
+  CARD_DECLINED
+  CARD_EXPIRED
+  FRAUD_SUSPECTED
+  GATEWAY_TIMEOUT
+  NETWORK_ERROR
+  THREE_DS_TIMEOUT
+  TECHNICAL_ERROR
+}
+
+// ============================================
+// MODELS
+// ============================================
+
+// User - Base user model
+model User {
+  id               String   @id @default(uuid())
+  email            String   @unique
+  name             String
+  marketingConsent Boolean  @default(false) // GDPR compliance - F6
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  orders Order[]
+
+  @@index([email])
+}
+
+// Order - Order / Cart (F1, F4, F6)
+// INV-F1-1: Immutable price snapshot (itemsSnapshot frozen at checkout)
+// INV-F1-2: 1 active CART per user
+// INV-F1-3: Optimistic lock via version
+model Order {
+  id                      String      @id @default(uuid())
+  userId                  String
+  status                  OrderStatus @default(CART)
+  version                 Int         @default(0) // Optimistic lock
+
+  // Immutable snapshots (F1)
+  itemsSnapshot           Json?       // { productId, name, priceSnapshot, quantity, subtotal }[]
+  totalSnapshot           Decimal?    @db.Decimal(10, 2)
+  promoSnapshot           Json?       // { code, type, tag, amount }[]
+
+  // Metadata
+  createdAt               DateTime    @default(now())
+  checkoutAt              DateTime?   // Timestamp of CART → CHECKOUT transition
+  updatedAt               DateTime    @updatedAt
+
+  // Payment (F5)
+  paymentId               String?     // Gateway transaction ID
+
+  // Abandoned cart recovery (F6)
+  recoveryEmailSent       Boolean     @default(false)
+  recoveryToken           String?     @unique
+  recoveryTokenExpiresAt  DateTime?
+
+  // Relations
+  user                    User                @relation(fields: [userId], references: [id])
+  stockReservations       StockReservation[]
+  paymentAttempts         PaymentAttempt[]
+  stateAudits             OrderStateAudit[]
+  recoveryLog             CartRecoveryLog?
+
+  // Indexes
+  @@index([userId, status])
+  @@index([status])
+  @@index([createdAt])
+  @@index([recoveryEmailSent, createdAt]) // F6 - Abandoned cart scan
+  @@index([recoveryToken])
+}
+
+// Product - Product with stock management (F1, F3)
+// INV-F3-1: stock_available + stock_reserved = stock_total
+// INV-GLOBAL-2: stock_available >= 0
+model Product {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  price          Decimal  @db.Decimal(10, 2)
+
+  // Stock management (F3)
+  stockTotal     Int      // Total stock (only changes on restock)
+  stockAvailable Int      // Available stock (decreases on reservation)
+  stockReserved  Int      @default(0) // Reserved stock (increases on reservation)
+
+  version        Int      @default(0) // Optimistic lock
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  stockReservations StockReservation[]
+
+  @@index([stockAvailable])
+}
+
+// StockReservation - Temporary stock reservation (F3)
+// INV-F3-1: 1 order_id = max 1 active reservation
+// INV-F3-2: Idempotent release
+model StockReservation {
+  id         String            @id @default(uuid())
+  orderId    String
+  productId  String
+  quantity   Int
+  status     ReservationStatus @default(ACTIVE)
+
+  reservedAt DateTime          @default(now())
+  expiresAt  DateTime          // Calculated: now + adaptive duration (10-60min)
+  releasedAt DateTime?         // Actual release timestamp
+
+  // Relations
+  order      Order             @relation(fields: [orderId], references: [id])
+  product    Product           @relation(fields: [productId], references: [id])
+
+  // Constraints
+  @@unique([orderId, productId]) // 1 reservation per product per order
+
+  // Indexes
+  @@index([orderId])
+  @@index([status, expiresAt]) // F3 expiration job
+  @@index([productId])
+}
+
+// Promotion - Promo codes and automatic promotions (F2)
+// INV-F2-1: Max 1 EXCLUSIVE promo per order
+// INV-F2-2: Deterministic order AUTO → STACKABLE → EXCLUSIVE
+model Promotion {
+  id                 String        @id @default(uuid())
+  code               String        @unique
+  type               PromotionType
+  tag                PromotionTag
+  value              Decimal       @db.Decimal(10, 2) // Percentage or fixed amount
+  active             Boolean       @default(true)
+
+  usageLimitPerUser  Int           @default(1) // Usage limit per user
+
+  expiresAt          DateTime?     // Null = no expiration
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  // Relations
+  usages             PromotionUsage[]
+
+  @@index([active, expiresAt])
+  @@index([tag, active])
+}
+
+// PromotionUsage - Track promotion usage per user (F2)
+model PromotionUsage {
+  userId      String
+  promotionId String
+  count       Int      @default(0) // Number of usages
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  promotion   Promotion @relation(fields: [promotionId], references: [id])
+
+  // Constraints
+  @@id([userId, promotionId])
+  @@index([userId])
+}
+
+// PaymentAttempt - Payment attempts (F5)
+// INV-F5-3: 1 order_id = max 1 active payment_attempt
+model PaymentAttempt {
+  id            String            @id @default(uuid())
+  orderId       String            @unique // 1 active attempt per order
+  status        PaymentStatus     @default(PENDING)
+  paymentMethod String?           // Credit card, transfer, wallet, etc.
+
+  errorCode     String?           // Gateway error code
+  errorType     PaymentErrorType? // DEFINITIVE/TEMPORARY classification
+
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  // Relations
+  order         Order             @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, status])
+  @@index([status])
+}
+
+// OrderStateAudit - State transition audit log (F4)
+// INV-F4-3: Audit log created for EVERY transition
+model OrderStateAudit {
+  id        String      @id @default(uuid())
+  orderId   String
+  fromState OrderStatus
+  toState   OrderStatus
+  reason    String?     // Transition reason (ex: "CHECKOUT_TIMEOUT", "PAYMENT_SUCCESS")
+  actor     String?     // User ID or "SYSTEM"
+
+  timestamp DateTime    @default(now())
+
+  // Relations
+  order     Order       @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, timestamp])
+  @@index([timestamp])
+}
+
+// CartRecoveryLog - Abandoned cart recovery tracking (F6)
+// INV-F6-1: 1 cart = max 1 recovery
+model CartRecoveryLog {
+  id          String    @id @default(uuid())
+  orderId     String    @unique // 1 log per cart
+  userId      String
+
+  emailSentAt DateTime  @default(now())
+  clickedAt   DateTime? // Recovery link click timestamp
+  convertedAt DateTime? // Conversion to paid order timestamp
+
+  token       String    @unique // Recovery token (references Order.recoveryToken)
+  expiresAt   DateTime  // Token expiration (7 days)
+
+  // Relations
+  order       Order     @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([userId])
+  @@index([emailSentAt])
+}

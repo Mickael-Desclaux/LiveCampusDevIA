@@ -566,6 +566,32 @@ model Order {
 }
 ```
 
+### Commentaires et Documentation
+
+**RÈGLE STRICTE : Tous les commentaires de code DOIVENT être en anglais.**
+
+```javascript
+// ✅ BON - Commentaires en anglais
+// Validate stock availability before reservation
+const product = await prisma.product.findUnique({ where: { id: productId } });
+
+// Check if user has exceeded promotion usage limit
+if (usage.count >= promotion.usageLimitPerUser) {
+    throw new Error('PROMO_LIMIT_EXCEEDED');
+}
+
+// ❌ MAUVAIS - Commentaires en français
+// Valider la disponibilité du stock avant réservation
+const product = await prisma.product.findUnique({ where: { id: productId } });
+```
+
+**Application :**
+- Code JavaScript/TypeScript : Commentaires en anglais
+- Prisma schema : Commentaires en anglais
+- README.md : Français (documentation utilisateur)
+- CLAUDE.md : Français (documentation projet)
+- prompts.md : Français (logs Wardley Map)
+
 ### Structure Projet
 
 ```

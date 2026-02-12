@@ -1082,3 +1082,19 @@ On va passer au cycle bleu de chaque feature pas à pas. Pour le moment, procèd
 
 **Résumé de la réponse :**
 Structure complète créée avec 3 dossiers principaux : (1) **server/** - Backend Node.js + Express avec package.json (express, prisma, dotenv, cors, nodemon), fichiers config (.env.example, .gitignore), prisma/schema.prisma vide (commenté pour ajout progressif models), src/index.js (entry point Express avec health check + error handler + logging), src/prisma.js (PrismaClient singleton), README.md avec instructions setup ; (2) **client/** - Frontend React + Vite avec package.json (react, axios, vite), vite.config.js (proxy /api vers localhost:3000), index.html, src/main.jsx, src/App.jsx (test connexion server + liste features), fichiers CSS (gradient purple, cards glassmorphism), src/services/api.js (axios instance + interceptors + méthodes à ajouter), README.md avec instructions ; (3) **Racine/** - README.md global (architecture, stack, installation server + client, documentation, structure projet, invariants critiques). Aucune feature implémentée, seulement le squelette prêt pour développement progressif.
+
+
+**Décision :** Validé. Structure de base prête.
+
+---
+
+### INIT.P2 - Création schéma Prisma complet
+
+**Prompt :**
+Commence par mettre en place le schéma prisma. (Avec ajout règle dans CLAUDE.md : tous les commentaires en anglais, puis modification schéma pour respecter cette règle)
+
+**Résumé de la réponse :**
+Schéma Prisma complet créé avec 6 enums (OrderStatus, ReservationStatus, PromotionType, PromotionTag, PaymentStatus, PaymentErrorType) et 9 models (User, Order, Product, StockReservation, Promotion, PromotionUsage, PaymentAttempt, OrderStateAudit, CartRecoveryLog). Chaque model documenté avec invariants codifiés (INV-F1-1, INV-F3-1, etc.), relations Prisma, contraintes UNIQUE pour idempotence, indexes pour performance (status, expiresAt, createdAt), lock optimiste via version fields. Tous commentaires en anglais (règle ajoutée dans CLAUDE.md section Conventions de Code). Schema couvre toutes les 6 features : Order/Product pour F1, Promotion pour F2, StockReservation pour F3, OrderStateAudit pour F4, PaymentAttempt pour F5, CartRecoveryLog pour F6.
+
+**Décision :**
+**Décision :** Validé. Schéma Prisma complet prêt pour génération client et migration.
