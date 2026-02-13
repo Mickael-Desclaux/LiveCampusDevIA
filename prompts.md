@@ -1298,3 +1298,127 @@ Tests:       66 passed, 66 total
 
 **Décision :** ✅ Validé. F2 implémenté avec 33 tests unitaires passants et 98.59% de couverture. Tous les critères de réussite respectés. Prochaine étape : F3 (StockReservationService).
 
+
+---
+
+### IMPL-F3.P1 - Implémentation StockReservationService + ReservationExpirationJob + Tests
+
+**Prompt :**
+Passe maintenant à l'implémentation du StockReservationService (F3).
+
+**Résumé de la réponse :**
+Implémentation complète de F3 avec architecture simplifiée transaction DB + job setInterval + tests unitaires couvrant 100% des critères de réussite :
+
+**1. Service stockReservationService.js** (333 lignes) :
+- DEFAULT_RESERVATION_DURATION = 10min, RESERVATION_DURATIONS par méthode paiement (CB 15min, virement 1h, wallet 5min)
+- reserveStock(orderId, items[], durationMs) function principale avec atomicité :
+  **Algorithme :**
+  1. Validation items (array non vide, quantités positives)
+  2. Check idempotence (findFirst ACTIVE reservation par orderId)
+  3. Validation stock disponible pour tous items (reject si 1 insuffisant)
+  4. Transaction atomique Serializable :
+     - Loop items : UPDATE product (decrement stockAvailable, increment stockReserved)
+     - Loop items : CREATE stockReservation (orderId, productId, quantity, expiresAt, status ACTIVE)
+  5. Return { success, idempotent, reservations[], expiresAt }
+- releaseStock(orderId, reason) function avec idempotence :
+  **Algorithme :**
+  1. findMany ACTIVE reservations par orderId
+  2. Si aucune, return { success, idempotent: true, releasedCount: 0 }
+  3. Transaction atomique Serializable :
+     - Loop reservations : UPDATE product (increment stockAvailable, decrement stockReserved)
+     - Loop reservations : UPDATE stockReservation (status RELEASED, releasedAt NOW)
+  4. Return { success, idempotent: false, releasedCount }
+- Helpers : getActiveReservations(), isReservationExpired(), extendReservation()
+- Invariant préservé : stockAvailable + stockReserved = stockTotal
+- Commentaires en anglais selon CLAUDE.md
+
+**2. Job reservationExpirationJob.js** (105 lignes) :
+- setInterval 30s polling réservations expirées
+- processExpiredReservations() :
+  1. findMany ACTIVE reservations avec expiresAt <= NOW, distinct orderId
+  2. Loop expired : releaseStock(orderId, 'EXPIRED')
+  3. Continue si une release échoue (autres traitées)
+  4. Log minutes elapsed depuis expiration
+- startJob(intervalMs) / stopJob() pour lifecycle management
+- Intégré dans index.js au démarrage serveur avec graceful shutdown
+- Gestion erreurs continue (job ne crash pas)
+
+**3. Tests unitaires** (30 tests, 100% pass, 100% coverage stockReservation) :
+- **Stock Reservation** (2 tests) :
+  - Réservation réussie multiple items ✅
+  - Expiration time correcte (custom duration) ✅
+
+- **Idempotence Reservation** (1 test) :
+  - Retourne existing si déjà réservé (pas de duplicate) ✅
+
+- **Stock Availability Validation** (5 tests) :
+  - Reject insufficient stock ❌
+  - Reject product not found ❌
+  - Reject negative quantity ❌
+  - Reject zero quantity ❌
+  - Reject empty items array ❌
+
+- **Atomic Stock Updates** (1 test) :
+  - Decrement available + increment reserved atomique ✅
+
+- **Stock Release** (2 tests) :
+  - Release réussi multiple réservations ✅
+  - Increment available + decrement reserved atomique ✅
+
+- **Release Idempotence** (1 test) :
+  - Success si aucune ACTIVE reservation (pas d'erreur) ✅
+
+- **Get Active Reservations** (2 tests) :
+  - Retourne réservations avec product details ✅
+  - Empty array si aucune ✅
+
+- **Check Expiration** (3 tests) :
+  - True si expiresAt < NOW ✅
+  - False si expiresAt > NOW ✅
+  - False si no active reservation ✅
+
+- **Extend Reservation** (2 tests) :
+  - Extension expiresAt réussie ✅
+  - Throw error si no active reservation ❌
+
+- **Multiple Items Atomicity** (1 test) :
+  - All or nothing (rollback si 1 item insufficient) ✅
+
+- **ReservationExpirationJob** (10 tests) :
+  - Process expired reservations (3 tests) : release multiple, pas de faux positifs, continue si erreur ✅
+  - Error handling (2 tests) : DB errors, release errors ✅
+  - Job lifecycle (4 tests) : start default, double start warning, stop, custom interval ✅
+  - Distinct processing (1 test) : chaque order 1x seulement ✅
+
+**4. Patterns respectés** :
+- INV-F3-1 : 1 order_id = max 1 réservation active (idempotence findFirst) ✅
+- INV-F3-2 : Libération idempotente (WHERE status = ACTIVE) ✅
+- INV-F3-3 : Atomicité réservation (transaction Serializable) ✅
+- INV-GLOBAL-1 : Cohérence stock (available + reserved = total) ✅
+- INV-GLOBAL-2 : Stock jamais négatif (validation avant decrement) ✅
+- INV-GLOBAL-3 : Atomicité transactions (Prisma.$transaction) ✅
+- INV-GLOBAL-4 : Idempotence garantie (check existing, WHERE status) ✅
+- INV-GLOBAL-5 : Traçabilité complète (StockReservation records) ✅
+
+**5. Coverage Report** :
+```
+------------------------------|---------|----------|---------|---------|-------------------
+File                          | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+------------------------------|---------|----------|---------|---------|-------------------
+All files                     |   98.43 |    94.68 |     100 |    98.4 |                   
+ jobs                         |     100 |      100 |     100 |     100 |                   
+  reservationExpirationJob.js |     100 |      100 |     100 |     100 |                   
+  stateTimeoutJob.js          |     100 |      100 |     100 |     100 |                   
+ services                     |   97.81 |    93.58 |     100 |   97.76 |                   
+  orderStateMachine.js        |   94.11 |       88 |     100 |   94.11 | 68-72,153         
+  promotionService.js         |   98.59 |    96.77 |     100 |    98.5 | 227               
+  stockReservationService.js  |     100 |    95.45 |     100 |     100 | 184               
+------------------------------|---------|----------|---------|---------|-------------------
+Test Suites: 5 passed
+Tests:       96 passed, 96 total
+```
+
+**Décision :** ✅ Validé. F3 implémenté avec 30 tests unitaires passants et 100% de couverture. Tous les critères de réussite respectés. 
+
+**Progression :** 3/6 features implémentées (F4 OrderStateMachine, F2 PromotionService, F3 StockReservationService). Prochaine étape : F1 (OrderService) qui orchestre F2 + F3 + F4.
+

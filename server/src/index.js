@@ -58,6 +58,7 @@ app.use((err, req, res, next) => {
 // ============================================
 
 const stateTimeoutJob = require('./jobs/stateTimeoutJob');
+const reservationExpirationJob = require('./jobs/reservationExpirationJob');
 
 // ============================================
 // START SERVER
@@ -69,6 +70,7 @@ app.listen(PORT, () => {
 
     // Start background jobs
     stateTimeoutJob.startJob();
+    reservationExpirationJob.startJob();
     console.log('⏰ Background jobs started');
 });
 
@@ -76,5 +78,6 @@ app.listen(PORT, () => {
 process.on('SIGINT', () => {
     console.log('\n🛑 Graceful shutdown initiated');
     stateTimeoutJob.stopJob();
+    reservationExpirationJob.stopJob();
     process.exit(0);
 });
