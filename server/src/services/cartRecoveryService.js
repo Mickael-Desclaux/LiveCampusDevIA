@@ -1,5 +1,5 @@
-const crypto = require('crypto');
-const prisma = require('../prisma');
+const crypto = require("crypto");
+const prisma = require("../prisma");
 
 // ============================================
 // CONSTANTS
@@ -24,7 +24,7 @@ const SCAN_BATCH_SIZE = 100;
  * @returns {string} - 64-character hex token
  */
 function generateRecoveryToken() {
-  return crypto.randomBytes(32).toString('hex');
+  return crypto.randomBytes(32).toString("hex");
 }
 
 /**
@@ -52,19 +52,19 @@ function calculateTokenExpiration() {
  */
 async function sendRecoveryEmail(cart, user, token) {
   // Simulate email send delay (50-150ms)
-  await new Promise(resolve => setTimeout(resolve, Math.random() * 100 + 50));
+  await new Promise((resolve) => setTimeout(resolve, Math.random() * 100 + 50));
 
   // Mock: Log email details (in production, call email service API)
   console.log(`[CartRecoveryService] Email sent to ${user.email}`, {
     cartId: cart.id,
     userId: user.id,
     token,
-    recoveryUrl: `${process.env.APP_URL || 'http://localhost:3000'}/cart/recover/${token}`,
+    recoveryUrl: `${process.env.APP_URL || "http://localhost:3000"}/cart/recover/${token}`,
   });
 
   // Simulate random email failure (5% of cases for testing)
   if (Math.random() < 0.05) {
-    throw new Error('EMAIL_SERVICE_UNAVAILABLE');
+    throw new Error("EMAIL_SERVICE_UNAVAILABLE");
   }
 }
 
@@ -101,15 +101,21 @@ async function scanAbandonedCarts(batchSize = SCAN_BATCH_SIZE) {
   try {
     // Step 1: Calculate time window (23-25h ago)
     const now = new Date();
-    const minAbandonedTime = new Date(now.getTime() - MAX_ABANDONED_HOURS * 60 * 60 * 1000);
-    const maxAbandonedTime = new Date(now.getTime() - MIN_ABANDONED_HOURS * 60 * 60 * 1000);
+    const minAbandonedTime = new Date(
+      now.getTime() - MAX_ABANDONED_HOURS * 60 * 60 * 1000,
+    );
+    const maxAbandonedTime = new Date(
+      now.getTime() - MIN_ABANDONED_HOURS * 60 * 60 * 1000,
+    );
 
-    console.log(`[CartRecoveryService] Scanning abandoned carts between ${minAbandonedTime.toISOString()} and ${maxAbandonedTime.toISOString()}`);
+    console.log(
+      `[CartRecoveryService] Scanning abandoned carts between ${minAbandonedTime.toISOString()} and ${maxAbandonedTime.toISOString()}`,
+    );
 
     // Step 2: Find eligible abandoned carts
     const abandonedCarts = await prisma.order.findMany({
       where: {
-        status: 'CART',
+        status: "CART",
         createdAt: {
           gte: minAbandonedTime,
           lte: maxAbandonedTime,
@@ -132,7 +138,9 @@ async function scanAbandonedCarts(batchSize = SCAN_BATCH_SIZE) {
       take: batchSize,
     });
 
-    console.log(`[CartRecoveryService] Found ${abandonedCarts.length} eligible abandoned carts`);
+    console.log(
+      `[CartRecoveryService] Found ${abandonedCarts.length} eligible abandoned carts`,
+    );
 
     // Step 3: Process each cart
     for (const cart of abandonedCarts) {
@@ -158,7 +166,9 @@ async function scanAbandonedCarts(batchSize = SCAN_BATCH_SIZE) {
 
         // Check if update was successful (race condition protection)
         if (updateResult.count === 0) {
-          console.log(`[CartRecoveryService] Cart ${cart.id} already processed (race condition)`);
+          console.log(
+            `[CartRecoveryService] Cart ${cart.id} already processed (race condition)`,
+          );
           continue;
         }
 
@@ -172,13 +182,17 @@ async function scanAbandonedCarts(batchSize = SCAN_BATCH_SIZE) {
           },
         });
 
-        console.log(`[CartRecoveryService] Created recovery token for cart ${cart.id} (expires: ${expiresAt.toISOString()})`);
+        console.log(
+          `[CartRecoveryService] Created recovery token for cart ${cart.id} (expires: ${expiresAt.toISOString()})`,
+        );
 
         // Step 6: Send email (non-blocking - errors don't prevent flag update)
         try {
           await sendRecoveryEmail(cart, cart.user, token);
           stats.sent++;
-          console.log(`[CartRecoveryService] Recovery email sent for cart ${cart.id}`);
+          console.log(
+            `[CartRecoveryService] Recovery email sent for cart ${cart.id}`,
+          );
         } catch (emailErr) {
           // Email failure is non-critical - flag already set to avoid retry spam
           stats.failed++;
@@ -186,7 +200,10 @@ async function scanAbandonedCarts(batchSize = SCAN_BATCH_SIZE) {
             cartId: cart.id,
             error: emailErr.message,
           });
-          console.error(`[CartRecoveryService] Failed to send email for cart ${cart.id}:`, emailErr.message);
+          console.error(
+            `[CartRecoveryService] Failed to send email for cart ${cart.id}:`,
+            emailErr.message,
+          );
           // Continue processing other carts
         }
       } catch (err) {
@@ -195,16 +212,21 @@ async function scanAbandonedCarts(batchSize = SCAN_BATCH_SIZE) {
           cartId: cart.id,
           error: err.message,
         });
-        console.error(`[CartRecoveryService] Failed to process cart ${cart.id}:`, err.message);
+        console.error(
+          `[CartRecoveryService] Failed to process cart ${cart.id}:`,
+          err.message,
+        );
         // Continue processing other carts
       }
     }
 
-    console.log(`[CartRecoveryService] Scan completed: ${stats.processed} processed, ${stats.sent} sent, ${stats.failed} failed`);
+    console.log(
+      `[CartRecoveryService] Scan completed: ${stats.processed} processed, ${stats.sent} sent, ${stats.failed} failed`,
+    );
 
     return stats;
   } catch (err) {
-    console.error('[CartRecoveryService] Scan failed:', err.message);
+    console.error("[CartRecoveryService] Scan failed:", err.message);
     throw err;
   }
 }
@@ -240,15 +262,15 @@ async function recoverCart(token) {
 
   // Validate token exists
   if (!order) {
-    const error = new Error('TOKEN_INVALID');
-    error.details = { reason: 'Token not found' };
+    const error = new Error("TOKEN_INVALID");
+    error.details = { reason: "Token not found" };
     throw error;
   }
 
   // Step 2: Validate token not expired - INV-F6-3
   const now = new Date();
   if (order.recoveryTokenExpiresAt && order.recoveryTokenExpiresAt < now) {
-    const error = new Error('TOKEN_EXPIRED');
+    const error = new Error("TOKEN_EXPIRED");
     error.details = {
       expiresAt: order.recoveryTokenExpiresAt,
       now,
@@ -257,8 +279,8 @@ async function recoverCart(token) {
   }
 
   // Step 3: Validate cart still in CART status (not converted)
-  if (order.status !== 'CART') {
-    const error = new Error('CART_ALREADY_CONVERTED');
+  if (order.status !== "CART") {
+    const error = new Error("CART_ALREADY_CONVERTED");
     error.details = {
       currentStatus: order.status,
     };
@@ -276,7 +298,9 @@ async function recoverCart(token) {
     },
   });
 
-  console.log(`[CartRecoveryService] Cart ${order.id} recovered via token ${token}`);
+  console.log(
+    `[CartRecoveryService] Cart ${order.id} recovered via token ${token}`,
+  );
 
   return {
     cart: order,
@@ -339,12 +363,14 @@ async function getRecoveryStats(startDate = null, endDate = null) {
 
   const stats = {
     sent: logs.length,
-    clicked: logs.filter(log => log.clickedAt !== null).length,
-    converted: logs.filter(log => log.convertedAt !== null).length,
+    clicked: logs.filter((log) => log.clickedAt !== null).length,
+    converted: logs.filter((log) => log.convertedAt !== null).length,
   };
 
-  stats.clickRate = stats.sent > 0 ? (stats.clicked / stats.sent * 100).toFixed(2) : 0;
-  stats.conversionRate = stats.sent > 0 ? (stats.converted / stats.sent * 100).toFixed(2) : 0;
+  stats.clickRate =
+    stats.sent > 0 ? ((stats.clicked / stats.sent) * 100).toFixed(2) : 0;
+  stats.conversionRate =
+    stats.sent > 0 ? ((stats.converted / stats.sent) * 100).toFixed(2) : 0;
 
   return stats;
 }
@@ -368,31 +394,39 @@ async function isEligibleForRecovery(cartId) {
   });
 
   if (!cart) {
-    return { eligible: false, reason: 'CART_NOT_FOUND' };
+    return { eligible: false, reason: "CART_NOT_FOUND" };
   }
 
-  if (cart.status !== 'CART') {
-    return { eligible: false, reason: 'NOT_CART_STATUS', currentStatus: cart.status };
+  if (cart.status !== "CART") {
+    return {
+      eligible: false,
+      reason: "NOT_CART_STATUS",
+      currentStatus: cart.status,
+    };
   }
 
   if (cart.recoveryEmailSent) {
-    return { eligible: false, reason: 'ALREADY_SENT' };
+    return { eligible: false, reason: "ALREADY_SENT" };
   }
 
   if (!cart.user.marketingConsent) {
-    return { eligible: false, reason: 'NO_MARKETING_CONSENT' };
+    return { eligible: false, reason: "NO_MARKETING_CONSENT" };
   }
 
   const now = new Date();
-  const minAbandonedTime = new Date(now.getTime() - MAX_ABANDONED_HOURS * 60 * 60 * 1000);
-  const maxAbandonedTime = new Date(now.getTime() - MIN_ABANDONED_HOURS * 60 * 60 * 1000);
+  const minAbandonedTime = new Date(
+    now.getTime() - MAX_ABANDONED_HOURS * 60 * 60 * 1000,
+  );
+  const maxAbandonedTime = new Date(
+    now.getTime() - MIN_ABANDONED_HOURS * 60 * 60 * 1000,
+  );
 
   if (cart.createdAt < minAbandonedTime) {
-    return { eligible: false, reason: 'TOO_OLD', createdAt: cart.createdAt };
+    return { eligible: false, reason: "TOO_OLD", createdAt: cart.createdAt };
   }
 
   if (cart.createdAt > maxAbandonedTime) {
-    return { eligible: false, reason: 'TOO_RECENT', createdAt: cart.createdAt };
+    return { eligible: false, reason: "TOO_RECENT", createdAt: cart.createdAt };
   }
 
   return { eligible: true };

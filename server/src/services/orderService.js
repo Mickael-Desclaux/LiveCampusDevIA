@@ -1,7 +1,10 @@
-const prisma = require('../prisma');
-const { validateAndApplyPromotions, incrementPromotionUsage } = require('./promotionService');
-const { reserveStock } = require('./stockReservationService');
-const { transitionState } = require('./orderStateMachine');
+const prisma = require("../prisma");
+const {
+  validateAndApplyPromotions,
+  incrementPromotionUsage,
+} = require("./promotionService");
+const { reserveStock } = require("./stockReservationService");
+const { transitionState } = require("./orderStateMachine");
 
 // ============================================
 // CONSTANTS
@@ -23,19 +26,23 @@ function validateCart(cart) {
 
   // Check cart exists
   if (!cart) {
-    errors.push({ field: 'cart', reason: 'CART_NOT_FOUND' });
+    errors.push({ field: "cart", reason: "CART_NOT_FOUND" });
     return { valid: false, errors };
   }
 
   // Check cart status is CART
-  if (cart.status !== 'CART') {
-    errors.push({ field: 'status', reason: 'INVALID_STATUS', current: cart.status });
+  if (cart.status !== "CART") {
+    errors.push({
+      field: "status",
+      reason: "INVALID_STATUS",
+      current: cart.status,
+    });
     return { valid: false, errors };
   }
 
   // Check cart has items
   if (!cart.itemsSnapshot || cart.itemsSnapshot.length === 0) {
-    errors.push({ field: 'items', reason: 'EMPTY_CART' });
+    errors.push({ field: "items", reason: "EMPTY_CART" });
     return { valid: false, errors };
   }
 
@@ -43,10 +50,10 @@ function validateCart(cart) {
   for (const item of cart.itemsSnapshot) {
     if (!item.productId || !item.quantity || item.quantity <= 0) {
       errors.push({
-        field: 'items',
-        reason: 'INVALID_ITEM',
+        field: "items",
+        reason: "INVALID_ITEM",
         productId: item.productId,
-        quantity: item.quantity
+        quantity: item.quantity,
       });
     }
   }
@@ -128,110 +135,130 @@ function calculateTotal(subtotal, promoResult) {
  * @returns {Promise<Object>} - { success: true, order: {...}, reservations: [...] }
  */
 async function createOrderFromCart(userId, promoCodes = []) {
-  return await prisma.$transaction(async (tx) => {
-    // Step 1: Get active cart for user
-    const cart = await tx.order.findFirst({
-      where: {
-        userId,
-        status: 'CART',
-      },
-    });
-
-    // Idempotence: Check if cart already converted to CHECKOUT
-    if (!cart) {
-      const existingCheckout = await tx.order.findFirst({
+  return await prisma.$transaction(
+    async (tx) => {
+      // Step 1: Get active cart for user
+      const cart = await tx.order.findFirst({
         where: {
           userId,
-          status: 'CHECKOUT',
-        },
-        orderBy: {
-          checkoutAt: 'desc',
+          status: "CART",
         },
       });
 
-      if (existingCheckout) {
-        console.log(`[OrderService] User ${userId} already has a CHECKOUT order (idempotent)`);
-        return {
-          success: true,
-          idempotent: true,
-          order: existingCheckout,
-        };
+      // Idempotence: Check if cart already converted to CHECKOUT
+      if (!cart) {
+        const existingCheckout = await tx.order.findFirst({
+          where: {
+            userId,
+            status: "CHECKOUT",
+          },
+          orderBy: {
+            checkoutAt: "desc",
+          },
+        });
+
+        if (existingCheckout) {
+          console.log(
+            `[OrderService] User ${userId} already has a CHECKOUT order (idempotent)`,
+          );
+          return {
+            success: true,
+            idempotent: true,
+            order: existingCheckout,
+          };
+        }
+
+        throw new Error("CART_NOT_FOUND");
       }
 
-      throw new Error('CART_NOT_FOUND');
-    }
+      // Step 2: Validate cart
+      const validation = validateCart(cart);
+      if (!validation.valid) {
+        const error = new Error("INVALID_CART");
+        error.errors = validation.errors;
+        throw error;
+      }
 
-    // Step 2: Validate cart
-    const validation = validateCart(cart);
-    if (!validation.valid) {
-      const error = new Error('INVALID_CART');
-      error.errors = validation.errors;
-      throw error;
-    }
+      // Step 3: Check if already in CHECKOUT (race condition protection)
+      if (cart.status !== "CART") {
+        throw new Error(`INVALID_STATUS: Cart is already ${cart.status}`);
+      }
 
-    // Step 3: Check if already in CHECKOUT (race condition protection)
-    if (cart.status !== 'CART') {
-      throw new Error(`INVALID_STATUS: Cart is already ${cart.status}`);
-    }
+      // Step 4: Create immutable price snapshot
+      const { subtotal, itemsSnapshot } = await createPriceSnapshot(
+        cart.itemsSnapshot,
+        tx,
+      );
 
-    // Step 4: Create immutable price snapshot
-    const { subtotal, itemsSnapshot } = await createPriceSnapshot(cart.itemsSnapshot, tx);
+      console.log(
+        `[OrderService] Created price snapshot for cart ${cart.id} (subtotal: ${subtotal})`,
+      );
 
-    console.log(`[OrderService] Created price snapshot for cart ${cart.id} (subtotal: ${subtotal})`);
+      // Step 5: Apply promotions (F2)
+      const promoResult = await validateAndApplyPromotions(
+        userId,
+        subtotal,
+        promoCodes,
+      );
 
-    // Step 5: Apply promotions (F2)
-    const promoResult = await validateAndApplyPromotions(userId, subtotal, promoCodes);
+      console.log(
+        `[OrderService] Applied promotions (discount: ${promoResult.totalDiscount}, final: ${promoResult.finalAmount})`,
+      );
 
-    console.log(`[OrderService] Applied promotions (discount: ${promoResult.totalDiscount}, final: ${promoResult.finalAmount})`);
+      // Step 6: Reserve stock (F3) - OUTSIDE transaction to avoid deadlock
+      // Stock reservation has its own transaction with Serializable isolation
+      // We'll do this in a separate step after cart update
 
-    // Step 6: Reserve stock (F3) - OUTSIDE transaction to avoid deadlock
-    // Stock reservation has its own transaction with Serializable isolation
-    // We'll do this in a separate step after cart update
+      // Step 7: Update order with snapshots (optimistic lock via version)
+      const currentVersion = cart.version;
 
-    // Step 7: Update order with snapshots (optimistic lock via version)
-    const currentVersion = cart.version;
+      const updateResult = await tx.order.updateMany({
+        where: {
+          id: cart.id,
+          status: "CART",
+          version: currentVersion, // Optimistic lock
+        },
+        data: {
+          itemsSnapshot,
+          totalSnapshot: promoResult.finalAmount,
+          promoSnapshot: promoResult.appliedPromotions,
+          version: { increment: 1 },
+          checkoutAt: new Date(),
+        },
+      });
 
-    const updateResult = await tx.order.updateMany({
-      where: {
-        id: cart.id,
-        status: 'CART',
-        version: currentVersion, // Optimistic lock
-      },
-      data: {
-        itemsSnapshot,
-        totalSnapshot: promoResult.finalAmount,
-        promoSnapshot: promoResult.appliedPromotions,
-        version: { increment: 1 },
-        checkoutAt: new Date(),
-      },
-    });
+      if (updateResult.count === 0) {
+        throw new Error(
+          "CONCURRENT_MODIFICATION: Cart was modified by another request",
+        );
+      }
 
-    if (updateResult.count === 0) {
-      throw new Error('CONCURRENT_MODIFICATION: Cart was modified by another request');
-    }
+      // Step 8: Get updated cart
+      const updatedCart = await tx.order.findUnique({
+        where: { id: cart.id },
+      });
 
-    // Step 8: Get updated cart
-    const updatedCart = await tx.order.findUnique({
-      where: { id: cart.id },
-    });
+      console.log(
+        `[OrderService] Updated cart ${cart.id} with snapshots (version ${currentVersion} → ${updatedCart.version})`,
+      );
 
-    console.log(`[OrderService] Updated cart ${cart.id} with snapshots (version ${currentVersion} → ${updatedCart.version})`);
+      // Step 9: Increment promotion usage (F2)
+      if (promoResult.appliedPromotions.length > 0) {
+        const promotionIds = promoResult.appliedPromotions.map((p) => p.id);
+        await incrementPromotionUsage(userId, promotionIds);
+      }
 
-    // Step 9: Increment promotion usage (F2)
-    if (promoResult.appliedPromotions.length > 0) {
-      const promotionIds = promoResult.appliedPromotions.map(p => p.id);
-      await incrementPromotionUsage(userId, promotionIds);
-    }
-
-    return {
-      success: true,
-      idempotent: false,
-      order: updatedCart,
-      promoResult,
-    };
-  }, {
-    isolationLevel: 'Serializable', // Prevent race conditions
-  });
+      return {
+        success: true,
+        idempotent: false,
+        order: updatedCart,
+        promoResult,
+      };
+    },
+    {
+      isolationLevel: "Serializable", // Prevent race conditions
+    },
+  );
 }
 
 /**
@@ -244,32 +271,41 @@ async function createOrderFromCart(userId, promoCodes = []) {
  * @param {number} reservationDurationMs - Reservation duration (default 10min)
  * @returns {Promise<Object>} - { success: true, reservations: [...] }
  */
-async function completeCheckout(orderId, reservationDurationMs = DEFAULT_RESERVATION_DURATION) {
+async function completeCheckout(
+  orderId,
+  reservationDurationMs = DEFAULT_RESERVATION_DURATION,
+) {
   // Step 1: Get order
   const order = await prisma.order.findUnique({
     where: { id: orderId },
   });
 
   if (!order) {
-    throw new Error('ORDER_NOT_FOUND');
+    throw new Error("ORDER_NOT_FOUND");
   }
 
   if (!order.itemsSnapshot || order.itemsSnapshot.length === 0) {
-    throw new Error('ORDER_MISSING_ITEMS');
+    throw new Error("ORDER_MISSING_ITEMS");
   }
 
   // Step 2: Reserve stock (F3)
-  const items = order.itemsSnapshot.map(item => ({
+  const items = order.itemsSnapshot.map((item) => ({
     productId: item.productId,
     quantity: item.quantity,
   }));
 
-  const reservationResult = await reserveStock(orderId, items, reservationDurationMs);
+  const reservationResult = await reserveStock(
+    orderId,
+    items,
+    reservationDurationMs,
+  );
 
-  console.log(`[OrderService] Reserved stock for order ${orderId} (${items.length} items, expires ${reservationResult.expiresAt?.toISOString()})`);
+  console.log(
+    `[OrderService] Reserved stock for order ${orderId} (${items.length} items, expires ${reservationResult.expiresAt?.toISOString()})`,
+  );
 
   // Step 3: Transition state CART → CHECKOUT (F4)
-  await transitionState(orderId, 'CHECKOUT', 'USER_CHECKOUT');
+  await transitionState(orderId, "CHECKOUT", "USER_CHECKOUT");
 
   console.log(`[OrderService] Transitioned order ${orderId} to CHECKOUT`);
 
@@ -291,7 +327,7 @@ async function completeCheckout(orderId, reservationDurationMs = DEFAULT_RESERVA
  */
 async function addItemToCart(userId, productId, quantity) {
   if (quantity <= 0) {
-    throw new Error('INVALID_QUANTITY: Quantity must be positive');
+    throw new Error("INVALID_QUANTITY: Quantity must be positive");
   }
 
   return await prisma.$transaction(async (tx) => {
@@ -299,7 +335,7 @@ async function addItemToCart(userId, productId, quantity) {
     let cart = await tx.order.findFirst({
       where: {
         userId,
-        status: 'CART',
+        status: "CART",
       },
     });
 
@@ -308,7 +344,7 @@ async function addItemToCart(userId, productId, quantity) {
       cart = await tx.order.create({
         data: {
           userId,
-          status: 'CART',
+          status: "CART",
           itemsSnapshot: [],
         },
       });
@@ -328,17 +364,21 @@ async function addItemToCart(userId, productId, quantity) {
     });
 
     if (!product) {
-      throw new Error('PRODUCT_NOT_FOUND');
+      throw new Error("PRODUCT_NOT_FOUND");
     }
 
     // Step 3: Soft check stock (non-blocking)
     if (product.stockAvailable < quantity) {
-      throw new Error(`INSUFFICIENT_STOCK: Only ${product.stockAvailable} available`);
+      throw new Error(
+        `INSUFFICIENT_STOCK: Only ${product.stockAvailable} available`,
+      );
     }
 
     // Step 4: Update cart items
     const currentItems = cart.itemsSnapshot || [];
-    const existingItemIndex = currentItems.findIndex(item => item.productId === productId);
+    const existingItemIndex = currentItems.findIndex(
+      (item) => item.productId === productId,
+    );
 
     let updatedItems;
     if (existingItemIndex >= 0) {
@@ -350,10 +390,7 @@ async function addItemToCart(userId, productId, quantity) {
       };
     } else {
       // Add new item
-      updatedItems = [
-        ...currentItems,
-        { productId, quantity },
-      ];
+      updatedItems = [...currentItems, { productId, quantity }];
     }
 
     // Step 5: Update cart
@@ -365,7 +402,9 @@ async function addItemToCart(userId, productId, quantity) {
       },
     });
 
-    console.log(`[OrderService] Added ${quantity}x ${product.name} to cart ${cart.id}`);
+    console.log(
+      `[OrderService] Added ${quantity}x ${product.name} to cart ${cart.id}`,
+    );
 
     return {
       success: true,
@@ -384,7 +423,7 @@ async function getActiveCart(userId) {
   return await prisma.order.findFirst({
     where: {
       userId,
-      status: 'CART',
+      status: "CART",
     },
     include: {
       user: {
@@ -408,15 +447,15 @@ async function getCheckoutOrder(userId) {
   return await prisma.order.findFirst({
     where: {
       userId,
-      status: 'CHECKOUT',
+      status: "CHECKOUT",
     },
     orderBy: {
-      checkoutAt: 'desc',
+      checkoutAt: "desc",
     },
     include: {
       stockReservations: {
         where: {
-          status: 'ACTIVE',
+          status: "ACTIVE",
         },
       },
     },

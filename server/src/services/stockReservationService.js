@@ -1,4 +1,4 @@
-const prisma = require('../prisma');
+const prisma = require("../prisma");
 
 // ============================================
 // CONSTANTS
@@ -41,7 +41,7 @@ async function validateStockAvailability(items, tx) {
     if (!product) {
       insufficientStock.push({
         productId: item.productId,
-        reason: 'PRODUCT_NOT_FOUND',
+        reason: "PRODUCT_NOT_FOUND",
         requested: item.quantity,
         available: 0,
       });
@@ -51,7 +51,7 @@ async function validateStockAvailability(items, tx) {
     if (product.stockAvailable < item.quantity) {
       insufficientStock.push({
         productId: item.productId,
-        reason: 'INSUFFICIENT_STOCK',
+        reason: "INSUFFICIENT_STOCK",
         requested: item.quantity,
         available: product.stockAvailable,
       });
@@ -80,95 +80,108 @@ async function validateStockAvailability(items, tx) {
  * @param {number} durationMs - Reservation duration in milliseconds (default: 10min)
  * @returns {Promise<Object>} - { success: true, reservations: [], expiresAt }
  */
-async function reserveStock(orderId, items, durationMs = DEFAULT_RESERVATION_DURATION) {
+async function reserveStock(
+  orderId,
+  items,
+  durationMs = DEFAULT_RESERVATION_DURATION,
+) {
   // Validation: items array must not be empty
   if (!items || items.length === 0) {
-    throw new Error('INVALID_ITEMS: Items array cannot be empty');
+    throw new Error("INVALID_ITEMS: Items array cannot be empty");
   }
 
   // Validation: all quantities must be positive
   for (const item of items) {
     if (item.quantity <= 0) {
-      throw new Error(`INVALID_QUANTITY: Quantity must be positive for product ${item.productId}`);
+      throw new Error(
+        `INVALID_QUANTITY: Quantity must be positive for product ${item.productId}`,
+      );
     }
   }
 
-  return await prisma.$transaction(async (tx) => {
-    // Step 1: Check idempotence - if reservation already exists for this order, return existing
-    const existingReservation = await tx.stockReservation.findFirst({
-      where: {
-        orderId,
-        status: 'ACTIVE',
-      },
-    });
-
-    if (existingReservation) {
-      // Idempotent: return success without creating duplicate
-      const allReservations = await tx.stockReservation.findMany({
+  return await prisma.$transaction(
+    async (tx) => {
+      // Step 1: Check idempotence - if reservation already exists for this order, return existing
+      const existingReservation = await tx.stockReservation.findFirst({
         where: {
           orderId,
-          status: 'ACTIVE',
+          status: "ACTIVE",
         },
       });
 
-      console.log(`[StockReservation] Order ${orderId} already has active reservation (idempotent)`);
+      if (existingReservation) {
+        // Idempotent: return success without creating duplicate
+        const allReservations = await tx.stockReservation.findMany({
+          where: {
+            orderId,
+            status: "ACTIVE",
+          },
+        });
+
+        console.log(
+          `[StockReservation] Order ${orderId} already has active reservation (idempotent)`,
+        );
+
+        return {
+          success: true,
+          idempotent: true,
+          reservations: allReservations,
+          expiresAt: existingReservation.expiresAt,
+        };
+      }
+
+      // Step 2: Validate stock availability for all items
+      const validation = await validateStockAvailability(items, tx);
+
+      if (!validation.valid) {
+        const error = new Error("INSUFFICIENT_STOCK");
+        error.insufficientStock = validation.insufficientStock;
+        throw error;
+      }
+
+      // Step 3: Reserve stock atomically for each item
+      const reservations = [];
+      const expiresAt = new Date(Date.now() + durationMs);
+
+      for (const item of items) {
+        // 3a. Update product stock (decrement available, increment reserved)
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            stockAvailable: { decrement: item.quantity },
+            stockReserved: { increment: item.quantity },
+          },
+        });
+
+        // 3b. Create reservation record
+        const reservation = await tx.stockReservation.create({
+          data: {
+            orderId,
+            productId: item.productId,
+            quantity: item.quantity,
+            expiresAt,
+            status: "ACTIVE",
+          },
+        });
+
+        reservations.push(reservation);
+      }
+
+      console.log(
+        `[StockReservation] Reserved stock for order ${orderId} (${items.length} items, expires ${expiresAt.toISOString()})`,
+      );
 
       return {
         success: true,
-        idempotent: true,
-        reservations: allReservations,
-        expiresAt: existingReservation.expiresAt,
+        idempotent: false,
+        reservations,
+        expiresAt,
       };
-    }
-
-    // Step 2: Validate stock availability for all items
-    const validation = await validateStockAvailability(items, tx);
-
-    if (!validation.valid) {
-      const error = new Error('INSUFFICIENT_STOCK');
-      error.insufficientStock = validation.insufficientStock;
-      throw error;
-    }
-
-    // Step 3: Reserve stock atomically for each item
-    const reservations = [];
-    const expiresAt = new Date(Date.now() + durationMs);
-
-    for (const item of items) {
-      // 3a. Update product stock (decrement available, increment reserved)
-      await tx.product.update({
-        where: { id: item.productId },
-        data: {
-          stockAvailable: { decrement: item.quantity },
-          stockReserved: { increment: item.quantity },
-        },
-      });
-
-      // 3b. Create reservation record
-      const reservation = await tx.stockReservation.create({
-        data: {
-          orderId,
-          productId: item.productId,
-          quantity: item.quantity,
-          expiresAt,
-          status: 'ACTIVE',
-        },
-      });
-
-      reservations.push(reservation);
-    }
-
-    console.log(`[StockReservation] Reserved stock for order ${orderId} (${items.length} items, expires ${expiresAt.toISOString()})`);
-
-    return {
-      success: true,
-      idempotent: false,
-      reservations,
-      expiresAt,
-    };
-  }, {
-    isolationLevel: 'Serializable', // Highest isolation to prevent race conditions
-  });
+    },
+    {
+      isolationLevel: "Serializable", // Highest isolation to prevent race conditions
+    },
+  );
 }
 
 /**
@@ -181,57 +194,64 @@ async function reserveStock(orderId, items, durationMs = DEFAULT_RESERVATION_DUR
  * @param {string} reason - Release reason (e.g., 'EXPIRED', 'CANCELLED', 'PAID')
  * @returns {Promise<Object>} - { success: true, releasedCount }
  */
-async function releaseStock(orderId, reason = 'MANUAL') {
-  return await prisma.$transaction(async (tx) => {
-    // Step 1: Find all ACTIVE reservations for this order
-    const reservations = await tx.stockReservation.findMany({
-      where: {
-        orderId,
-        status: 'ACTIVE',
-      },
-    });
+async function releaseStock(orderId, reason = "MANUAL") {
+  return await prisma.$transaction(
+    async (tx) => {
+      // Step 1: Find all ACTIVE reservations for this order
+      const reservations = await tx.stockReservation.findMany({
+        where: {
+          orderId,
+          status: "ACTIVE",
+        },
+      });
 
-    // Idempotence check: if no active reservations, return success
-    if (reservations.length === 0) {
-      console.log(`[StockReservation] No active reservations to release for order ${orderId} (idempotent)`);
+      // Idempotence check: if no active reservations, return success
+      if (reservations.length === 0) {
+        console.log(
+          `[StockReservation] No active reservations to release for order ${orderId} (idempotent)`,
+        );
+        return {
+          success: true,
+          idempotent: true,
+          releasedCount: 0,
+        };
+      }
+
+      // Step 2: Release stock atomically for each reservation
+      for (const reservation of reservations) {
+        // 2a. Update product stock (increment available, decrement reserved)
+        await tx.product.update({
+          where: { id: reservation.productId },
+          data: {
+            stockAvailable: { increment: reservation.quantity },
+            stockReserved: { decrement: reservation.quantity },
+          },
+        });
+
+        // 2b. Update reservation status to RELEASED
+        await tx.stockReservation.update({
+          where: { id: reservation.id },
+          data: {
+            status: "RELEASED",
+            releasedAt: new Date(),
+          },
+        });
+      }
+
+      console.log(
+        `[StockReservation] Released stock for order ${orderId} (${reservations.length} reservations, reason: ${reason})`,
+      );
+
       return {
         success: true,
-        idempotent: true,
-        releasedCount: 0,
+        idempotent: false,
+        releasedCount: reservations.length,
       };
-    }
-
-    // Step 2: Release stock atomically for each reservation
-    for (const reservation of reservations) {
-      // 2a. Update product stock (increment available, decrement reserved)
-      await tx.product.update({
-        where: { id: reservation.productId },
-        data: {
-          stockAvailable: { increment: reservation.quantity },
-          stockReserved: { decrement: reservation.quantity },
-        },
-      });
-
-      // 2b. Update reservation status to RELEASED
-      await tx.stockReservation.update({
-        where: { id: reservation.id },
-        data: {
-          status: 'RELEASED',
-          releasedAt: new Date(),
-        },
-      });
-    }
-
-    console.log(`[StockReservation] Released stock for order ${orderId} (${reservations.length} reservations, reason: ${reason})`);
-
-    return {
-      success: true,
-      idempotent: false,
-      releasedCount: reservations.length,
-    };
-  }, {
-    isolationLevel: 'Serializable',
-  });
+    },
+    {
+      isolationLevel: "Serializable",
+    },
+  );
 }
 
 /**
@@ -244,7 +264,7 @@ async function getActiveReservations(orderId) {
   return await prisma.stockReservation.findMany({
     where: {
       orderId,
-      status: 'ACTIVE',
+      status: "ACTIVE",
     },
     include: {
       product: {
@@ -270,10 +290,10 @@ async function isReservationExpired(orderId) {
   const reservation = await prisma.stockReservation.findFirst({
     where: {
       orderId,
-      status: 'ACTIVE',
+      status: "ACTIVE",
     },
     orderBy: {
-      expiresAt: 'asc', // Get earliest expiration
+      expiresAt: "asc", // Get earliest expiration
     },
   });
 
@@ -296,12 +316,12 @@ async function extendReservation(orderId, additionalMs) {
     const reservations = await tx.stockReservation.findMany({
       where: {
         orderId,
-        status: 'ACTIVE',
+        status: "ACTIVE",
       },
     });
 
     if (reservations.length === 0) {
-      throw new Error('NO_ACTIVE_RESERVATION');
+      throw new Error("NO_ACTIVE_RESERVATION");
     }
 
     const oldExpiresAt = reservations[0].expiresAt;
@@ -311,14 +331,16 @@ async function extendReservation(orderId, additionalMs) {
     await tx.stockReservation.updateMany({
       where: {
         orderId,
-        status: 'ACTIVE',
+        status: "ACTIVE",
       },
       data: {
         expiresAt: newExpiresAt,
       },
     });
 
-    console.log(`[StockReservation] Extended reservation for order ${orderId} from ${oldExpiresAt.toISOString()} to ${newExpiresAt.toISOString()}`);
+    console.log(
+      `[StockReservation] Extended reservation for order ${orderId} from ${oldExpiresAt.toISOString()} to ${newExpiresAt.toISOString()}`,
+    );
 
     return {
       success: true,

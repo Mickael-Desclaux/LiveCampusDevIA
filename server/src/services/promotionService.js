@@ -1,4 +1,4 @@
-const prisma = require('../prisma');
+const prisma = require("../prisma");
 
 // ============================================
 // CONSTANTS - Compatibility Matrix
@@ -30,18 +30,22 @@ const PROMOTION_ORDER = {
  * - STACKABLE + AUTO can combine
  */
 function validatePromotionCompatibility(promotions) {
-  const tags = promotions.map(p => p.tag);
-  const exclusiveCount = tags.filter(t => t === 'EXCLUSIVE').length;
+  const tags = promotions.map((p) => p.tag);
+  const exclusiveCount = tags.filter((t) => t === "EXCLUSIVE").length;
   const hasExclusive = exclusiveCount > 0;
-  const hasOtherTags = tags.some(t => t !== 'EXCLUSIVE');
+  const hasOtherTags = tags.some((t) => t !== "EXCLUSIVE");
 
   // Rule 1 & 2: Max 1 EXCLUSIVE, and EXCLUSIVE is incompatible with others
   if (exclusiveCount > 1) {
-    throw new Error('INCOMPATIBLE_PROMOTIONS: Only one EXCLUSIVE promotion allowed');
+    throw new Error(
+      "INCOMPATIBLE_PROMOTIONS: Only one EXCLUSIVE promotion allowed",
+    );
   }
 
   if (hasExclusive && hasOtherTags) {
-    throw new Error('INCOMPATIBLE_PROMOTIONS: EXCLUSIVE promotions cannot be combined with others');
+    throw new Error(
+      "INCOMPATIBLE_PROMOTIONS: EXCLUSIVE promotions cannot be combined with others",
+    );
   }
 
   return true;
@@ -85,13 +89,13 @@ function sortPromotionsByOrder(promotions) {
  */
 function calculateSingleDiscount(subtotal, promotion) {
   switch (promotion.type) {
-    case 'PERCENTAGE':
+    case "PERCENTAGE":
       return (subtotal * parseFloat(promotion.value)) / 100;
 
-    case 'FIXED_AMOUNT':
+    case "FIXED_AMOUNT":
       return parseFloat(promotion.value);
 
-    case 'FREE_SHIPPING':
+    case "FREE_SHIPPING":
       // Free shipping discount is handled separately (not applied to subtotal)
       return 0;
 
@@ -156,7 +160,7 @@ function applyPromotionsSequentially(subtotal, promotions) {
 async function validateAndApplyPromotions(userId, subtotal, promoCodes = []) {
   // Validation: subtotal must be > 0
   if (subtotal <= 0) {
-    throw new Error('INVALID_SUBTOTAL: Subtotal must be greater than 0');
+    throw new Error("INVALID_SUBTOTAL: Subtotal must be greater than 0");
   }
 
   // === PHASE 1: VALIDATE ===
@@ -168,12 +172,9 @@ async function validateAndApplyPromotions(userId, subtotal, promoCodes = []) {
   const now = new Date();
   const autoPromotions = await prisma.promotion.findMany({
     where: {
-      tag: 'AUTO',
+      tag: "AUTO",
       active: true,
-      OR: [
-        { expiresAt: null },
-        { expiresAt: { gt: now } },
-      ],
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
     },
   });
 
@@ -188,19 +189,19 @@ async function validateAndApplyPromotions(userId, subtotal, promoCodes = []) {
 
       // Check if promotion exists
       if (!promotion) {
-        invalidCodes.push({ code, reason: 'PROMOTION_NOT_FOUND' });
+        invalidCodes.push({ code, reason: "PROMOTION_NOT_FOUND" });
         continue;
       }
 
       // Check if active
       if (!promotion.active) {
-        invalidCodes.push({ code, reason: 'PROMOTION_INACTIVE' });
+        invalidCodes.push({ code, reason: "PROMOTION_INACTIVE" });
         continue;
       }
 
       // Check if expired
       if (promotion.expiresAt && promotion.expiresAt <= now) {
-        invalidCodes.push({ code, reason: 'PROMOTION_EXPIRED' });
+        invalidCodes.push({ code, reason: "PROMOTION_EXPIRED" });
         continue;
       }
 
@@ -208,11 +209,11 @@ async function validateAndApplyPromotions(userId, subtotal, promoCodes = []) {
       const withinLimit = await validateUsageLimit(
         userId,
         promotion.id,
-        promotion.usageLimitPerUser
+        promotion.usageLimitPerUser,
       );
 
       if (!withinLimit) {
-        invalidCodes.push({ code, reason: 'USAGE_LIMIT_EXCEEDED' });
+        invalidCodes.push({ code, reason: "USAGE_LIMIT_EXCEEDED" });
         continue;
       }
 
@@ -289,7 +290,7 @@ async function getUserPromotionUsage(userId) {
     },
   });
 
-  return usages.map(usage => ({
+  return usages.map((usage) => ({
     promotionId: usage.promotionId,
     code: usage.promotion.code,
     count: usage.count,
