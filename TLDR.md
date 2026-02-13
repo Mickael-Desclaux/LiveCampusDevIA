@@ -14,7 +14,7 @@ J'ai aussi décidé de terminer le cycle rouge de chaque feature avant de commen
 
 Au cours de ce cycle et de ceux dédiés à chaque feature, j'ai un peu perdu de vue le temps qu'il me restait de disponible pour implémenter les solutions dans un cycle bleu et je me suis rendu compte que je partais sur une solution trop complexe, qui était par conséquent trop longue à mettre en place.
 
-Pour corriger cela, je suis passé par une phase de simplification de la logique des différents service de chaque feature, que j'ai validé un à un à l'aide de l'IA, en lui demandant de me fournir du pseudo code pour chaque solution.
+Pour corriger cela, je suis passé par une phase de simplification de la logique des différents service de chaque feature, que j'ai validé un à un à l'aide de l'IA, en lui demandant de me fournir du pseudo code pour chaque solution. La phase de simplification est documentée à partir de la ligne 785 de `prompts.md`
 
 ### Difficultés rencontrées et remarques sur mon application de la Wardley map
 

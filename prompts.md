@@ -2207,12 +2207,6 @@ Implémentation de la relance des paniers abandonnés (F6) via un service CartRe
    - Simplicité + batch size 100
    - Compromis précision vs complexité
 
-### Coverage Report
-
-```
-N/A - couverture non mesurée dans cette session (tests écrits).
-```
-
 **Décision :** ✅ Validé. F6 implémenté avec CartRecoveryService + CartReminderJob et 50 tests unitaires. Invariants principaux respectés, tracking prêt.
 
 **Progression :** 6/6 features implémentées (F4 OrderStateMachine, F2 PromotionService, F3 StockReservationService, F1 OrderService, F5 PaymentService, F6 CartRecoveryService). Prochaine étape : intégrer les routes API F6 et démarrer `cartReminderJob` au lancement serveur.
