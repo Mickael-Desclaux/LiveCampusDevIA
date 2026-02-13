@@ -1083,7 +1083,6 @@ On va passer au cycle bleu de chaque feature pas à pas. Pour le moment, procèd
 **Résumé de la réponse :**
 Structure complète créée avec 3 dossiers principaux : (1) **server/** - Backend Node.js + Express avec package.json (express, prisma, dotenv, cors, nodemon), fichiers config (.env.example, .gitignore), prisma/schema.prisma vide (commenté pour ajout progressif models), src/index.js (entry point Express avec health check + error handler + logging), src/prisma.js (PrismaClient singleton), README.md avec instructions setup ; (2) **client/** - Frontend React + Vite avec package.json (react, axios, vite), vite.config.js (proxy /api vers localhost:3000), index.html, src/main.jsx, src/App.jsx (test connexion server + liste features), fichiers CSS (gradient purple, cards glassmorphism), src/services/api.js (axios instance + interceptors + méthodes à ajouter), README.md avec instructions ; (3) **Racine/** - README.md global (architecture, stack, installation server + client, documentation, structure projet, invariants critiques). Aucune feature implémentée, seulement le squelette prêt pour développement progressif.
 
-
 **Décision :** Validé. Structure de base prête.
 
 ---
@@ -1110,6 +1109,7 @@ Passe à l'implémentation du service OrderStateMachine (F4). Ajoute des tests u
 Implémentation complète de F4 avec architecture simplifiée enum + Map + tests unitaires couvrant 100% des critères de réussite :
 
 **1. Service orderStateMachine.js** (253 lignes) :
+
 - TRANSITIONS_MAP constante hardcodée (CART→[CHECKOUT, CANCELLED], CHECKOUT→[PAID, CANCELLED], PAID→[PREPARING, CANCELLED], PREPARING→[SHIPPED, CANCELLED], SHIPPED→[DELIVERED], terminal states [])
 - STATE_TIMEOUTS config (CHECKOUT 15min, PREPARING 48h)
 - transitionOrderState() function principale avec algorithme 7 étapes :
@@ -1125,6 +1125,7 @@ Implémentation complète de F4 avec architecture simplifiée enum + Map + tests
 - Commentaires en anglais selon CLAUDE.md
 
 **2. Job stateTimeoutJob.js** (152 lignes) :
+
 - setInterval 60s polling ordres expirés
 - processExpiredCheckouts() : CHECKOUT > 15min → auto-transition CANCELLED via OrderStateMachine
 - alertExpiredPreparing() : PREPARING > 48h → log alerte ops (pas de transition auto)
@@ -1133,6 +1134,7 @@ Implémentation complète de F4 avec architecture simplifiée enum + Map + tests
 - Gestion erreurs continue (une erreur n'arrête pas le traitement des autres ordres)
 
 **3. Tests unitaires** (33 tests, 100% pass, 96.77% coverage) :
+
 - **orderStateMachine.test.js** (29 tests) :
   - Valid Transitions (3 tests) : CART→CHECKOUT, CHECKOUT→PAID, CHECKOUT→CANCELLED
   - Invalid Transitions (3 tests) : CART→PAID rejeté, terminal states rejettés
@@ -1155,11 +1157,13 @@ Implémentation complète de F4 avec architecture simplifiée enum + Map + tests
   - Utilisation jest.useFakeTimers() pour tester setInterval
 
 **4. Configuration Jest** :
-- jest.config.js créé : testEnvironment node, coverageThreshold 80%, testMatch **/__tests__/**/*.test.js
+
+- jest.config.js créé : testEnvironment node, coverageThreshold 80%, testMatch **/**tests**/**/\*.test.js
 - package.json mis à jour : scripts test/test:watch/test:coverage, devDeps jest + supertest
 - CLAUDE.md mis à jour : Stack technique (Tests: Jest + supertest), Package Manager: pnpm, RÈGLE 5 : Tests unitaires obligatoires avant validation feature
 
 **5. Patterns respectés** :
+
 - INV-F4-1 : Transitions autorisées définies dans TRANSITIONS_MAP ✅
 - INV-F4-2 : Préconditions validées (PAID/PREPARING/SHIPPED) ✅
 - INV-F4-3 : Audit log créé pour TOUTE transition ✅
@@ -1168,19 +1172,129 @@ Implémentation complète de F4 avec architecture simplifiée enum + Map + tests
 - INV-GLOBAL-5 : Traçabilité complète (OrderStateAudit) ✅
 
 **6. Coverage Report** :
+
 ```
 -----------------------|---------|----------|---------|---------|-------------------
-File                   | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+File                   | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
 -----------------------|---------|----------|---------|---------|-------------------
-All files              |   96.77 |    91.17 |     100 |   96.77 |                   
- jobs                  |     100 |      100 |     100 |     100 |                   
-  stateTimeoutJob.js   |     100 |      100 |     100 |     100 |                   
- services              |   94.11 |       88 |     100 |   94.11 |                   
-  orderStateMachine.js |   94.11 |       88 |     100 |   94.11 | 66-70,145         
+All files              |   96.77 |    91.17 |     100 |   96.77 |
+ jobs                  |     100 |      100 |     100 |     100 |
+  stateTimeoutJob.js   |     100 |      100 |     100 |     100 |
+ services              |   94.11 |       88 |     100 |   94.11 |
+  orderStateMachine.js |   94.11 |       88 |     100 |   94.11 | 66-70,145
 -----------------------|---------|----------|---------|---------|-------------------
 Test Suites: 2 passed
 Tests:       33 passed, 33 total
 ```
 
 **Décision :** ✅ Validé. F4 implémenté avec 33 tests unitaires passants et 96.77% de couverture. Tous les critères de réussite respectés. Prochaine étape : F2 (PromotionService).
+
+---
+
+### IMPL-F2.P1 - Implémentation PromotionService + Tests
+
+**Prompt :**
+Passe à l'implémentation de PromotionService (F2).
+
+**Résumé de la réponse :**
+Implémentation complète de F2 avec architecture simplifiée if/else séquentiel + tests unitaires couvrant 100% des critères de réussite :
+
+**1. Service promotionService.js** (302 lignes) :
+- PROMOTION_ORDER constante hardcodée (AUTO: 1, STACKABLE: 2, EXCLUSIVE: 3)
+- Matrice compatibilité (6 règles) : max 1 EXCLUSIVE, EXCLUSIVE incompatible avec autres, STACKABLE+AUTO combinables
+- validateAndApplyPromotions() function principale avec two-phase validate/apply :
+  **Phase 1 VALIDATE :**
+  1. Récupération AUTO promotions actives non expirées
+  2. Validation codes manuels (existence, active, expiration, limite usage)
+  3. Validation matrice compatibilité
+  4. Tri déterministe AUTO→STACKABLE→EXCLUSIVE
+  **Phase 2 APPLY :**
+  5. Calcul réductions séquentielles (PERCENTAGE/FIXED_AMOUNT/FREE_SHIPPING)
+  6. Protection montant final >= 0 (Math.max(0, amount - discount))
+  7. Stop application si montant atteint 0
+- incrementPromotionUsage() : upsert PromotionUsage.count avec increment atomique
+- getUserPromotionUsage() : stats usage par user (count/limit/remaining)
+- Helpers exportés pour tests : validatePromotionCompatibility(), sortPromotionsByOrder(), calculateSingleDiscount()
+- Commentaires en anglais selon CLAUDE.md
+
+**2. Tests unitaires** (33 tests, 100% pass, 98.59% coverage) :
+- **Promotion Compatibility Matrix** (7 tests) :
+  - Multiple STACKABLE autorisés ✅
+  - AUTO + STACKABLE combinables ✅
+  - Multiple AUTO autorisés ✅
+  - Single EXCLUSIVE autorisé ✅
+  - Multiple EXCLUSIVE rejetés ❌
+  - EXCLUSIVE + STACKABLE rejetés ❌
+  - EXCLUSIVE + AUTO rejetés ❌
+
+- **Deterministic Ordering** (3 tests) :
+  - Sort order AUTO→STACKABLE→EXCLUSIVE ✅
+  - Order stability pour même tag ✅
+  - PROMOTION_ORDER constants vérifiées ✅
+
+- **Discount Calculation** (4 tests) :
+  - PERCENTAGE calcul exact (10% de 100 = 10) ✅
+  - FIXED_AMOUNT calcul exact ✅
+  - FREE_SHIPPING retourne 0 ✅
+  - Unknown type throw error ❌
+
+- **Final Amount Protection** (2 tests) :
+  - Protection montant < 0 (100% discount → 0) ✅
+  - Protection total discounts > subtotal → 0 ✅
+
+- **Sequential Application** (2 tests) :
+  - Application séquentielle ordre correct (AUTO 10% puis STACK 20 fixed) ✅
+  - EXCLUSIVE seul appliqué correctement ✅
+
+- **Usage Limit Validation** (2 tests) :
+  - Rejet si limite dépassée (count >= usageLimitPerUser) ❌
+  - Autorisation si dans limite (count < usageLimitPerUser) ✅
+
+- **Validation Errors** (5 tests) :
+  - Subtotal = 0 rejeté ❌
+  - Subtotal < 0 rejeté ❌
+  - Code non existant → PROMOTION_NOT_FOUND ❌
+  - Inactive promotion → PROMOTION_INACTIVE ❌
+  - Expired promotion → PROMOTION_EXPIRED ❌
+
+- **Idempotence** (1 test) :
+  - N appels identiques = même résultat (pure calculation) ✅
+
+- **Increment Usage** (3 tests) :
+  - Create usage première utilisation ✅
+  - Increment usage existant ✅
+  - Multiple promotions incrémentées ✅
+
+- **Get User Usage** (2 tests) :
+  - Stats usage retournées (code/count/limit/remaining) ✅
+  - Empty array si pas d'usage ✅
+
+- **Edge Cases** (2 tests) :
+  - Empty codes array → pas de discount ✅
+  - Stop application si montant atteint 0 ✅
+
+**3. Patterns respectés** :
+- INV-F2-1 : Max 1 promo EXCLUSIVE, incompatible avec autres ✅
+- INV-F2-2 : Ordre déterministe AUTO→STACKABLE→EXCLUSIVE ✅
+- INV-F2-3 : Montant final >= 0 (protection Math.max) ✅
+- INV-GLOBAL-4 : Idempotence garantie (two-phase validate/apply pure) ✅
+- INV-GLOBAL-5 : Traçabilité complète (PromotionUsage tracking) ✅
+
+**4. Coverage Report** :
+```
+-----------------------|---------|----------|---------|---------|-------------------
+File                   | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+-----------------------|---------|----------|---------|---------|-------------------
+All files              |   97.56 |    93.84 |     100 |    97.5 |                   
+ jobs                  |     100 |      100 |     100 |     100 |                   
+  stateTimeoutJob.js   |     100 |      100 |     100 |     100 |                   
+ services              |   96.72 |    92.85 |     100 |   96.61 |                   
+  orderStateMachine.js |   94.11 |       88 |     100 |   94.11 | 68-72,153         
+  promotionService.js  |   98.59 |    96.77 |     100 |    98.5 | 227               
+-----------------------|---------|----------|---------|---------|-------------------
+Test Suites: 3 passed
+Tests:       66 passed, 66 total
+```
+
+**Décision :** ✅ Validé. F2 implémenté avec 33 tests unitaires passants et 98.59% de couverture. Tous les critères de réussite respectés. Prochaine étape : F3 (StockReservationService).
 

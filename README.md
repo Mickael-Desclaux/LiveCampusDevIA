@@ -5,9 +5,10 @@ Application e-commerce développée avec la méthodologie Wardley Map.
 ## 📋 Architecture
 
 **Stack Technique :**
+
 - **Backend** : Node.js + Express + Prisma + PostgreSQL
 - **Frontend** : React + Vite
-- **Méthodologie** : Wardley Map (architecture simplifiée pour MVP 1.5 jour)
+- **Méthodologie** : Wardley Map (architecture simplifiée)
 
 ## 🎯 Features
 
@@ -111,8 +112,9 @@ Voir `CLAUDE.md` pour la liste complète.
 ## 📝 Logs de Développement
 
 Tous les prompts, réponses et décisions sont loggés dans `prompts.md` :
+
 - **Phase Globale** : Exploration, hypothèses, analyse architecture
-- **Phase Simplification** : Architecture simplifiée pour MVP 1.5j
+- **Phase Simplification** : Architecture simplifiée pour MVP
 - **Cycle Bleu** : Implémentation feature par feature
 
 ## 🤝 Contribution
