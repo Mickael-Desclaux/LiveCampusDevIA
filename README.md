@@ -1,6 +1,10 @@
-# VibeCoding - E-Commerce MVP
+# Wardley Map - Workflow E-Commerce
 
 Application e-commerce développée avec la méthodologie Wardley Map.
+
+## 📖 À lire dans un premier temps
+
+J'ai ajouté un fichier `TLDR.md` que j'ai rédigé afin d'expliquer de manière plus digeste mes choix, la méthodologie appliquée ainsi que les difficultés rencontrées au cour de ce projet (le fichier prompts.md étant assez lourd, je voulais synthétiser la chose pour plus de clarté)
 
 ## 📋 Architecture
 
@@ -8,7 +12,7 @@ Application e-commerce développée avec la méthodologie Wardley Map.
 
 - **Backend** : Node.js + Express + Prisma + PostgreSQL
 - **Frontend** : React + Vite
-- **Méthodologie** : Wardley Map (architecture simplifiée)
+- **Méthodologie** : Wardley Map
 
 ## 🎯 Features
 
@@ -27,7 +31,7 @@ Application e-commerce développée avec la méthodologie Wardley Map.
 
 - Node.js >= 18
 - PostgreSQL >= 14
-- npm ou yarn
+- npm ou pnpm
 
 ### 1. Server
 
@@ -61,6 +65,7 @@ Client accessible sur `http://localhost:5173`
 
 ## 📚 Documentation
 
+- **[TLDR.md](./TLDR.md)** - Récapitulatif global de mon avancement et de mes réflexions sur le projet
 - **[CLAUDE.md](./CLAUDE.md)** - Guide de développement complet (règles, patterns, invariants)
 - **[prompts.md](./prompts.md)** - Documentation Wardley Map (analyse, décisions, architecture)
 - **[server/README.md](./server/README.md)** - Documentation backend
@@ -120,7 +125,3 @@ Tous les prompts, réponses et décisions sont loggés dans `prompts.md` :
 ## 🤝 Contribution
 
 Suivre strictement les règles définies dans `CLAUDE.md`.
-
-## 📄 License
-
-MIT
